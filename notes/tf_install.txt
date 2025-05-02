@@ -1,0 +1,13 @@
+GPU Setup for TensorFlow and Gymnasium on Ubuntu
+To get TensorFlow working with your NVIDIA RTX 3090 GPU on Ubuntu for Gymnasium/CartPole:
+The standard installation didn't properly link TensorFlow with your GPU, despite having drivers installed.
+The solution was to use TensorFlow's bundled CUDA option:
+bash# In virtual environment
+pip uninstall tensorflow -y
+pip install tensorflow[and-cuda]
+No need to manually install CUDA toolkit or cuDNN libraries as the bundled version includes everything.
+Verification of successful GPU setup:
+GPU is detected by TensorFlow
+CUDA operations work correctly
+Matrix multiplication executes on GPU
+The warnings about duplicate registrations of CUDA components are harmless and can be ignored.
