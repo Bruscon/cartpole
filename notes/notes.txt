@@ -1,0 +1,7 @@
+notes
+
+This first cartpole implementation uses a q table which discretizes the states into buckets. It's committed.
+
+Next I want to use a deep Q network to replace the q table with a NN that approximates the quality function 
+	- PPO and soft actor critic outperofrm q-learning in high dimensional state spaces. 
+		- look into LSTM or GRU networks 
