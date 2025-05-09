@@ -5,3 +5,21 @@ This first cartpole implementation uses a q table which discretizes the states i
 Next I want to use a deep Q network to replace the q table with a NN that approximates the quality function 
 	- PPO and soft actor critic outperofrm q-learning in high dimensional state spaces. 
 		- look into LSTM or GRU networks 
+
+	- Implemented with AI. It uses 1.3GB of RAM and training slows the more episodes it does. Something is probably wrong. Should compare to the online example
+		- It also doesn't really use the GPU. Claude says a model this size probably won't benefit from the GPU. 
+			- pytorch example: https://pytorch.org/tutorials/intermediate/reinforcement_q_learning.html
+			- https://github.com/PacktPublishing/Advanced-Deep-Learning-with-Keras/blob/master/chapter9-drl/dqn-cartpole-9.6.1.py
+
+		- Noticed that learning rate does not decay. TODO? 
+
+		- My intuition is that training should not take this long. Its a tiny network with only so many knobs to turn. I could do it manually with a PID loop in less time. There must be massive inefficiency here. Just my gut feeling. 
+
+		- TODO: load a model and just view the cartpole run with no epsilon. 
+			- DONE! Now that I can see it, it's not balancing great. It only cares ifit makes it to the end of an episode. THe angle isnt great and the cart continuously moves to the side. 
+				- a more complex reward function will probably help. It should be punished proportional to the pole angle and cart velocity. 
+					- DONE! Its only ont episode 76 already the avg score is 41.69 vs 33.95 previously
+						- The reward is being calculated differently though. Is this affecting it? Probably negatively! previously it got a reward of +1 for each frame alive, now it is getting less than that. So I beleive it is learning much much faster now. Success!
+
+		- TODO: implement with a tensor graph? Can this be computed more efficiently? For example with gradient_tape? Remove the rendering too. It doesn't work and I don't think Claude can fix it
+		
