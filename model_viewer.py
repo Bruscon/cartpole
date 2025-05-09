@@ -6,10 +6,16 @@ import time
 import math
 import os
 import pygame
+import argparse  # Added for command line argument parsing
 
-def demonstrate_trained_agent():
+def demonstrate_trained_agent(model_path):
     # Load the trained model
-    model = load_model('saved_models/original_reward_function_model.keras')
+    try:
+        model = load_model(model_path)
+        print(f"Successfully loaded model from {model_path}")
+    except Exception as e:
+        print(f"Error loading model from {model_path}: {e}")
+        return
     
     # Set environment variable to ensure the rendering window has a title we can find
     os.environ['SDL_VIDEO_WINDOW_POS'] = '50,50'
@@ -105,10 +111,17 @@ def demonstrate_trained_agent():
                 break
 
 if __name__ == "__main__":
-    print("Demonstrating trained CartPole agent with custom reward visualization.")
+    # Set up argument parser
+    parser = argparse.ArgumentParser(description='Demonstrate a trained CartPole agent')
+    parser.add_argument('--model', type=str, default='saved_models/original_reward_function_model.keras',
+                        help='Path to the trained model file (.keras)')
+    args = parser.parse_args()
+    
+    print(f"Demonstrating trained CartPole agent using model: {args.model}")
     print("Press Ctrl+C to stop or close the window.")
+    
     try:
-        demonstrate_trained_agent()
+        demonstrate_trained_agent(args.model)
     except KeyboardInterrupt:
         print("\nDemonstration stopped by user.")
     except Exception as e:
@@ -124,4 +137,4 @@ if __name__ == "__main__":
         try:
             gym.envs.registry.clear()
         except:
-            pass            
+            pass

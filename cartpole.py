@@ -31,7 +31,6 @@ if verbose > 1:
 
 #setup logging
 log_dir = f"logs/dqn_{time.strftime('%Y%m%d-%H%M%S')}"
-tensorboard_callback = TensorBoard(log_dir=log_dir, histogram_freq=1)
 
 
 # Create log directory for TensorBoard
@@ -39,25 +38,22 @@ current_time = time.strftime('%Y%m%d-%H%M%S')
 log_dir = f"logs/dqn_{current_time}"
 os.makedirs(log_dir, exist_ok=True)
 
-# Create summary writer for TensorBoard once
-summary_writer = tf.summary.create_file_writer(log_dir)
 
 # Global counter for tracking total steps
 global_step = tf.Variable(0, trainable=False, dtype=tf.int64)
 
 
 class DQNAgent:
-    def __init__(self, state_size, action_size, summary_writer, global_step):
+    def __init__(self, state_size, action_size, global_step):
         self.state_size = state_size
         self.action_size = action_size
-        self.summary_writer = summary_writer
         self.global_step = global_step
         
         # Hyperparameters
         self.memory = deque(maxlen=20000)  # Experience replay buffer - increased size
         self.gamma = 0.9                   # Discount factor
         self.epsilon = 1.0                 # Exploration rate
-        self.epsilon_min = 0.01            # Minimum exploration probability
+        self.epsilon_min = 0.1             # Minimum exploration probability
         self.epsilon_decay = 0.995         # Exponential decay rate for exploration
         self.learning_rate = 0.001         # Learning rate
         self.batch_size = 128              # Size of batches for training
@@ -73,8 +69,6 @@ class DQNAgent:
         # Initialize target model with same weights as main model
         self.update_target_model()
         
-        # Track metrics for TensorBoard
-        self.episode_loss_history = []
     
     def _build_model(self):
         """Neural Network for Deep-Q learning Model"""
@@ -94,9 +88,9 @@ class DQNAgent:
         """Store experience in memory"""
         self.memory.append((state, action, reward, next_state, done))
     
-    def act(self, state):
-        """Epsilon-greedy action selection"""
-        if np.random.rand() <= self.epsilon:
+    def act(self, state, eval_mode=False):
+        """Epsilon-greedy action selection, with option for pure exploitation"""
+        if not eval_mode and np.random.rand() <= self.epsilon:
             return random.randrange(self.action_size)
         
         # Get Q-values for all actions in current state
@@ -104,7 +98,7 @@ class DQNAgent:
         return np.argmax(q_values[0])
     
     def replay(self):
-        """Train the network using randomly sampled experiences"""
+        """Train the network using randomly sampled experiences with vectorized operations"""
         # Check if we have enough experiences
         if len(self.memory) < self.train_start:
             return 0.0  # Return 0 loss if no training performed
@@ -112,83 +106,118 @@ class DQNAgent:
         # Sample a random batch from memory
         minibatch = random.sample(self.memory, self.batch_size)
         
-        # Extract batches
+        # Extract batches using vectorized operations
         states = np.array([experience[0][0] for experience in minibatch])
         actions = np.array([experience[1] for experience in minibatch])
         rewards = np.array([experience[2] for experience in minibatch])
         next_states = np.array([experience[3][0] for experience in minibatch])
         dones = np.array([experience[4] for experience in minibatch])
         
-        # Calculate target Q values
-        targets = self.model.predict(states, verbose=0)
+        # Get all predictions in single batched operations
+        targets = self.model.predict(states, verbose=0, batch_size=self.batch_size)
+        next_q_values = self.model.predict(next_states, verbose=0, batch_size=self.batch_size)
+        target_q_values = self.target_model.predict(next_states, verbose=0, batch_size=self.batch_size)
         
-        # Calculate target Q value for action using target model
-        target_q_values = self.target_model.predict(next_states, verbose=0)
+        # Get max actions from main model predictions (already computed)
+        max_actions = np.argmax(next_q_values, axis=1)
         
-        # Double DQN: use main model to select action, target model to get Q-value
-        max_actions = np.argmax(self.model.predict(next_states, verbose=0), axis=1)
+        # Create action indices for efficient batch update
+        batch_indices = np.arange(self.batch_size)
         
-        # Update target for actions taken
-        for i in range(self.batch_size):
-            if dones[i]:
-                targets[i][actions[i]] = rewards[i]
-            else:
-                # DDQN update
-                targets[i][actions[i]] = rewards[i] + self.gamma * target_q_values[i][max_actions[i]]
+        # Vectorized update for targets
+        # Start with the rewards
+        target_values = rewards.copy()
         
-        # Train the network - without callbacks
-        history = self.model.fit(states, targets, epochs=1, verbose=0, batch_size=self.batch_size)
+        # For non-terminal states, add the discounted future reward
+        non_terminal_mask = ~dones
+        target_values[non_terminal_mask] += self.gamma * target_q_values[non_terminal_mask, max_actions[non_terminal_mask]]
+        
+        # Update only the specific action values using advanced indexing
+        targets[batch_indices, actions] = target_values
+        
+        # Train the network with optimized batch processing
+        history = self.model.fit(
+            states, 
+            targets, 
+            epochs=1, 
+            verbose=0, 
+            batch_size=self.batch_size
+        )
         
         # Increment global step and track loss
         loss = history.history['loss'][0]
-        self.episode_loss_history.append(loss)
         
         # Update epsilon
         if self.epsilon > self.epsilon_min:
             self.epsilon *= self.epsilon_decay
             
         return loss
+
+def run_evaluation_episode(env, agent, episode_num):
+    """Run a single evaluation episode with rendering and no training"""
+    state, _ = env.reset()
+    state = np.reshape(state, [1, agent.state_size])
+    done = False
+    score = 0
+    rewards = []
     
-    def log_episode_stats(self, episode, score, avg_score, avg_reward):
-        """Log episode statistics to TensorBoard"""
-        # Calculate average loss for this episode
-        avg_loss = np.mean(self.episode_loss_history) if self.episode_loss_history else 0.0
+    # Create rendering environment
+    eval_env = gym.make('CartPole-v1', render_mode='human')
+    eval_state, _ = eval_env.reset()
+    eval_state = np.reshape(eval_state, [1, agent.state_size])
+    
+    print(f"\n--- VISUAL EVALUATION (Episode {episode_num}) ---")
+    
+    while not done:
+        # Use model without exploration (epsilon=0)
+        action = agent.act(eval_state, eval_mode=True)
         
-        # Log scalar metrics
-        with self.summary_writer.as_default():
-            tf.summary.scalar('score', score, step=episode)
-            tf.summary.scalar('average_score_100', avg_score, step=episode)
-            tf.summary.scalar('average_reward', avg_reward, step=episode)
-            tf.summary.scalar('average_loss', avg_loss, step=episode)
-            tf.summary.scalar('epsilon', self.epsilon, step=episode)
+        # Take action
+        next_state, reward, terminated, truncated, _ = eval_env.step(action)
+        done = terminated or truncated
+        
+        # Calculate the same custom rewards for consistency in reporting
+        MAX_ANGLE = 0.2095
+        MAX_VELOCITY = 2.0
+        
+        cart_velocity = next_state[1]
+        pole_angle = next_state[2]
+        
+        angle_reward = 1.0 - (abs(pole_angle) / MAX_ANGLE)
+        velocity_reward = max(0, 1.0 - (abs(cart_velocity) / MAX_VELOCITY))
+        
+        custom_reward = 0.7 * angle_reward + 0.3 * velocity_reward
+        
+        if done and score < 499:
+            custom_reward = -10
             
-            # Log model weights and gradients every 10 episodes
-            if episode % 10 == 0:
-                for i, layer in enumerate(self.model.layers):
-                    for j, weight in enumerate(layer.weights):
-                        tf.summary.histogram(f"layer_{i}_weight_{j}", weight, step=episode)
-            
-            # Ensure metrics are written to disk
-            self.summary_writer.flush()
-            
-        # Reset loss history for next episode
-        self.episode_loss_history = []
+        rewards.append(custom_reward)
+        eval_state = np.reshape(next_state, [1, agent.state_size])
+        score += 1
+    
+    avg_reward = np.mean(rewards) if rewards else 0
+    print(f"Evaluation Score: {score}, Avg Reward: {avg_reward:.4f}")
+    print("--- END OF EVALUATION ---\n")
+    
+    # Close the rendering environment
+    eval_env.close()
+    
+    return score, avg_reward
 
 
 def main():
     MAX_ANGLE = 0.2095  # Maximum angle before termination (in radians)
     MAX_VELOCITY = 2.0  # Reasonable maximum cart velocity threshold
 
-    # Create environments - one for training, one for rendering
+    # Create environment without rendering for training
     env = gym.make('CartPole-v1')
-    render_env = gym.make('CartPole-v1', render_mode='human')
     
     # Get environment information
     state_size = env.observation_space.shape[0]
     action_size = env.action_space.n
     
-    # Create agent with the TensorBoard writer
-    agent = DQNAgent(state_size, action_size, summary_writer, global_step)
+    # Create agent
+    agent = DQNAgent(state_size, action_size, global_step)
     
     # Training parameters
     EPISODES = 500
@@ -198,25 +227,25 @@ def main():
     avg_scores = []
     
     for e in range(EPISODES):
-        # Determine if we should render this episode
-        if e % 10 == 0:
-            current_env = render_env
-        else:
-            current_env = env
+        # Every 10th episode, run an evaluation with rendering
+        if (e==0 or e > 50) and e % 10 == 0:
+            eval_score, eval_reward = run_evaluation_episode(env, agent, e)
         
-        # Reset environment
-        state, _ = current_env.reset()
+        # Reset environment for training
+        state, _ = env.reset()
         state = np.reshape(state, [1, state_size])
         done = False
         score = 0
         episode_rewards = []  # Track all rewards for episode statistics
+        episode_loss = []  # Track all losses for episode statistics
+
         
         while not done:
             # Select action
             action = agent.act(state)
             
             # Take action
-            next_state, env_reward, terminated, truncated, _ = current_env.step(action)
+            next_state, env_reward, terminated, truncated, _ = env.step(action)
             done = terminated or truncated
             
             # Extract values for custom reward
@@ -248,8 +277,9 @@ def main():
             episode_rewards.append(custom_reward)
             score += 1
             
-            # Train on past experiences (replay)
-            agent.replay()
+            # Train on past experiences (replay) after each fourth step
+            if score%4==0:
+                episode_loss.append(agent.replay())
             
             # Increment global step
             global_step.assign_add(1)
@@ -257,6 +287,7 @@ def main():
             if done:
                 break
         
+
         # Update target model periodically
         if e % agent.update_target_frequency == 0:
             agent.update_target_model()
@@ -270,13 +301,13 @@ def main():
         avg_scores.append(avg_score)
         
         # Calculate average reward per step for this episode
-        avg_reward = np.mean(episode_rewards) if episode_rewards else 0
-        
-        # Log episode statistics to TensorBoard
-        agent.log_episode_stats(e, score, avg_score, avg_reward)
+        avg_reward = np.mean(episode_rewards) if episode_rewards else 0 
+
+        # Calculate average loss per step for this episode
+        avg_loss = np.mean(episode_loss) if episode_loss else 0
         
         print(f"Episode: {e}/{EPISODES}, Score: {score}, Avg Score: {avg_score:.2f}, " +
-              f"Avg Reward: {avg_reward:.4f}, Epsilon: {agent.epsilon:.4f}")
+              f"Avg Reward: {avg_reward:.2f}, Epsilon: {agent.epsilon:.2f}, Avg Loss: {avg_loss:.2f}")
         
         # If we've solved the environment (avg score >= 195 over 100 episodes), stop
         if len(scores) >= 100 and avg_score >= 195:
@@ -285,9 +316,8 @@ def main():
     
     agent.model.save('trained_cartpole_model.keras')
 
-    # Close environments
+    # Close environment
     env.close()
-    render_env.close()
 
 if __name__ == "__main__":
     main()

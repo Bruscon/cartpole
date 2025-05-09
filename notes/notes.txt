@@ -6,7 +6,7 @@ Next I want to use a deep Q network to replace the q table with a NN that approx
 	- PPO and soft actor critic outperofrm q-learning in high dimensional state spaces. 
 		- look into LSTM or GRU networks 
 
-	- Implemented with AI. It uses 1.3GB of RAM and training slows the more episodes it does. Something is probably wrong. Should compare to the online example
+	- Implemented with Claude. It uses 1.3GB of RAM and training slows the more episodes it does. Something is probably wrong. Should compare to the online example
 		- It also doesn't really use the GPU. Claude says a model this size probably won't benefit from the GPU. 
 			- pytorch example: https://pytorch.org/tutorials/intermediate/reinforcement_q_learning.html
 			- https://github.com/PacktPublishing/Advanced-Deep-Learning-with-Keras/blob/master/chapter9-drl/dqn-cartpole-9.6.1.py
@@ -18,8 +18,43 @@ Next I want to use a deep Q network to replace the q table with a NN that approx
 		- TODO: load a model and just view the cartpole run with no epsilon. 
 			- DONE! Now that I can see it, it's not balancing great. It only cares ifit makes it to the end of an episode. THe angle isnt great and the cart continuously moves to the side. 
 				- a more complex reward function will probably help. It should be punished proportional to the pole angle and cart velocity. 
-					- DONE! Its only ont episode 76 already the avg score is 41.69 vs 33.95 previously
-						- The reward is being calculated differently though. Is this affecting it? Probably negatively! previously it got a reward of +1 for each frame alive, now it is getting less than that. So I beleive it is learning much much faster now. Success!
+					- DONE! Its only on episode 76 already the avg score is 41.69 vs 33.95 previously
+						- score is still calculated the same way
 
 		- TODO: implement with a tensor graph? Can this be computed more efficiently? For example with gradient_tape? Remove the rendering too. It doesn't work and I don't think Claude can fix it
-		
+
+		- I am removing the rending and making the training happen only at the END of the episode, as opposed to every simulation step as before. 
+			- IT gets higher rewards in less time but more episodes. I think this is good. 
+				- The epsilon only decays when it trains so the epsilon stays high for much longer. I should increase the decay rate. 
+					- for comparison: epsilon decay was .995 and we gpt avg score 23 by episode 185.
+						- changing to .98: avg score 23 at episode 69!! 
+							- this is way better, but maybe a foregone conclusion becacuse I took randomness out. 
+								- Yeah, the avg score is actually going backwards now. 
+						- changing to .99
+							- its better but it still plateaus and decreases as epsilon gets low. Why? It should only move forward...
+								- Lets go backwards. Changing epsilon back to .995 and training every step. I want to see Claude's optimized replay function broke something
+									- OK it's learning. Claude didn't break anything. Its still weird though. Training goes nowhere until epsilon gets below like .05 and then it gets much much better. 
+										- Is this expected because of the randomness? How can I tell what's actually best for learning? 
+											- Lets make it so every 10th episode it runs with no epsilon and no training, just for eval purposes
+				- Can optimize the replay function
+					- reduce deque size? not yet
+					- only call model.predict once
+						- claude helped me optimize this. I'm just gonna trust that it works.
+
+		- TODO: experiment by changing the optimizer.
+
+		- TODO: try differen epsilon schemes. Maybe add a window to modify epsilon live. 
+			- breakthroughs occured when epsilon was at .24 and .02. Lets first try modifyying the lower limit from .1
+				- my initial random model did really really well this time.
+					- its getting worse as it trains. 
+						- had a gigantic breakthrough at episode 61. Will let it get to next eval 
+
+		-TODO: more changes to reward function. Punished for displacement from center instead of cart velocity. 
+
+
+		-TODO: add a function to save off a model at any time
+
+		-TODO: track elapsed time
+
+		- I still don't understand why episodes take longer and longer to train. batch sizes don't grow even if the deque fills up. It seems like somethings wrong.
+
