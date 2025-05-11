@@ -7,6 +7,33 @@ import math
 import os
 import pygame
 import argparse  # Added for command line argument parsing
+from gymnasium import spaces
+from gymnasium.core import ObservationWrapper
+
+class CartPoleCenteringWrapper(ObservationWrapper):
+    """
+    Wrapper that adds normalized distance from cart center as an additional observation.
+    This helps the agent learn to keep the cart centered.
+    """
+    def __init__(self, env):
+        super().__init__(env)
+        # Update observation space to include normalized distance from center
+        old_shape = env.observation_space.shape
+        self.observation_space = spaces.Box(
+            low=-np.inf, 
+            high=np.inf, 
+            shape=(old_shape[0],),  # Keep same dimension as we'll normalize the position
+            dtype=np.float32
+        )
+        
+        # Track max position for normalization
+        self.max_position = 2.4  # CartPole max position
+    
+    def observation(self, observation):
+        # We don't actually modify the observation here, just make sure it's normalized
+        # Cart position is already at index 0, and pole angle at index 2
+        return observation
+
 
 def demonstrate_trained_agent(model_path):
     # Load the trained model
@@ -22,6 +49,7 @@ def demonstrate_trained_agent(model_path):
     
     # Create environment with rendering
     env = gym.make('CartPole-v1', render_mode='human')
+    env = CartPoleCenteringWrapper(env)  # Apply the wrapper
     
     # Get environment information
     state_size = env.observation_space.shape[0]
@@ -76,23 +104,19 @@ def demonstrate_trained_agent(model_path):
             next_state, reward, terminated, truncated, _ = env.step(action)
             done = terminated or truncated
             
-            # Extract values for custom reward
-            cart_position = next_state[0]
-            cart_velocity = next_state[1]
-            pole_angle = next_state[2]
-            pole_angular_velocity = next_state[3]
-            
-            # Calculate custom reward components
+            # Calculate reward components
+            cart_position = next_state[0]  # Cart position
+            pole_angle = next_state[2]     # Pole angle
             angle_reward = 1.0 - (abs(pole_angle) / MAX_ANGLE)
-            velocity_reward = max(0, 1.0 - (abs(cart_velocity) / MAX_VELOCITY))
+            position_reward = max(0, 1.0 - (abs(cart_position) / MAX_POSITION))  # Higher when closer to center
             
-            # Combined reward (weighted 70% angle, 30% velocity)
-            custom_reward = 0.7 * angle_reward + 0.3 * velocity_reward
+            # Combined reward (weighted 70% angle, 30% position)
+            custom_reward = 0.7 * angle_reward + 0.3 * position_reward
             
             # Create a small text overlay
             # Print reward info to console instead
             print(f"\rAngle: {pole_angle:.4f} rad → Reward: {angle_reward:.2f} | "
-                  f"Velocity: {cart_velocity:.4f} → Reward: {velocity_reward:.2f} | "
+                  f"Position: {cart_position:.4f} → Reward: {position_reward:.2f} | "
                   f"Combined: {custom_reward:.2f} | Score: {score}", end="")
             
             # Reshape state for model input
@@ -116,6 +140,9 @@ if __name__ == "__main__":
     parser.add_argument('--model', type=str, default='saved_models/original_reward_function_model.keras',
                         help='Path to the trained model file (.keras)')
     args = parser.parse_args()
+
+    MAX_ANGLE = 0.2095  # Maximum angle before termination (in radians)
+    MAX_POSITION = 2.4  # Maximum cart position
     
     print(f"Demonstrating trained CartPole agent using model: {args.model}")
     print("Press Ctrl+C to stop or close the window.")

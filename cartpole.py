@@ -10,6 +10,10 @@ from collections import deque
 import random
 import time
 import os
+import shutil
+from gymnasium import spaces
+from gymnasium.core import ObservationWrapper
+import argparse
 
 verbose = 1
 
@@ -29,39 +33,91 @@ if verbose > 1:
     print("Using GPU:", tf.config.list_physical_devices('GPU'))
     print("CUDA built:", tf.test.is_built_with_cuda())
 
-#setup logging
-log_dir = f"logs/dqn_{time.strftime('%Y%m%d-%H%M%S')}"
+# Parse command line arguments
+parser = argparse.ArgumentParser(description='DQN training for CartPole')
+parser.add_argument('--log-dir', type=str, help='Directory for logs')
+parser.add_argument('--model', type=str, help='Path to initial model')
+args = parser.parse_args()
 
+# Use the log directory if provided, otherwise create one
+if args.log_dir:
+    log_dir = args.log_dir
+else:
+    current_time = time.strftime('%Y%m%d-%H%M%S')
+    log_dir = f"logs/dqn_{current_time}"
 
-# Create log directory for TensorBoard
-current_time = time.strftime('%Y%m%d-%H%M%S')
-log_dir = f"logs/dqn_{current_time}"
+# load the initial model from the arguments
+if args.model:
+    INITIAL_MODEL_PATH = args.model
+else:
+    INITIAL_MODEL_PATH = None
+
 os.makedirs(log_dir, exist_ok=True)
 
+# Archive a copy of this script to the logging folder 
+script_path = os.path.abspath(__file__)
+script_name = os.path.basename(script_path)
+script_archive_path = os.path.join(log_dir, script_name)
+shutil.copy2(script_path, script_archive_path)
+print(f"Script archived to: {script_archive_path}")
 
 # Global counter for tracking total steps
 global_step = tf.Variable(0, trainable=False, dtype=tf.int64)
 
+# Create TensorBoard writer
+summary_writer = tf.summary.create_file_writer(log_dir)
+
+
+class CartPoleCenteringWrapper(ObservationWrapper):
+    """
+    Wrapper that adds normalized distance from cart center as an additional observation.
+    This helps the agent learn to keep the cart centered.
+    """
+    def __init__(self, env):
+        super().__init__(env)
+        # Update observation space to include normalized distance from center
+        old_shape = env.observation_space.shape
+        self.observation_space = spaces.Box(
+            low=-np.inf, 
+            high=np.inf, 
+            shape=(old_shape[0],),  # Keep same dimension as we'll normalize the position
+            dtype=np.float32
+        )
+        
+        # Track max position for normalization
+        self.max_position = 2.4  # CartPole max position
+    
+    def observation(self, observation):
+        # We don't actually modify the observation here, just make sure it's normalized
+        # Cart position is already at index 0, and pole angle at index 2
+        return observation
+
 
 class DQNAgent:
-    def __init__(self, state_size, action_size, global_step):
+    def __init__(self, state_size, action_size, global_step, log_dir, initial_model_path=None):
         self.state_size = state_size
         self.action_size = action_size
         self.global_step = global_step
+        self.log_dir = log_dir
+        self.initial_model_path = initial_model_path
         
         # Hyperparameters
-        self.memory = deque(maxlen=20000)  # Experience replay buffer - increased size
+        self.memory = deque(maxlen=20000)   # Experience replay buffer
         self.gamma = 0.9                   # Discount factor
         self.epsilon = 1.0                 # Exploration rate
-        self.epsilon_min = 0.1             # Minimum exploration probability
+        self.epsilon_min = 0.01            # Minimum exploration probability
         self.epsilon_decay = 0.995         # Exponential decay rate for exploration
         self.learning_rate = 0.001         # Learning rate
         self.batch_size = 128              # Size of batches for training
         self.train_start = 1000            # Minimum experiences before training
         self.update_target_frequency = 10  # How often to update target network (episodes)
         
-        # Main model - trained every step
-        self.model = self._build_model()
+        # Load or build the main model
+        if initial_model_path and os.path.exists(initial_model_path):
+            print(f"Loading initial model from: {initial_model_path}")
+            self.model = tf.keras.models.load_model(initial_model_path)
+        else:
+            self.model = self._build_model()
         
         # Target model - used for more stable Q-value predictions
         self.target_model = self._build_model()
@@ -146,12 +202,15 @@ class DQNAgent:
         
         # Increment global step and track loss
         loss = history.history['loss'][0]
-        
-        # Update epsilon
-        if self.epsilon > self.epsilon_min:
-            self.epsilon *= self.epsilon_decay
             
         return loss
+    
+    def save_model(self, episode):
+        """Save model checkpoint"""
+        model_path = os.path.join(self.log_dir, f"model_episode_{episode}.keras")
+        self.model.save(model_path)
+        print(f"Model saved to: {model_path}")
+
 
 def run_evaluation_episode(env, agent, episode_num):
     """Run a single evaluation episode with rendering and no training"""
@@ -163,6 +222,7 @@ def run_evaluation_episode(env, agent, episode_num):
     
     # Create rendering environment
     eval_env = gym.make('CartPole-v1', render_mode='human')
+    eval_env = CartPoleCenteringWrapper(eval_env)  # Apply the wrapper
     eval_state, _ = eval_env.reset()
     eval_state = np.reshape(eval_state, [1, agent.state_size])
     
@@ -176,17 +236,19 @@ def run_evaluation_episode(env, agent, episode_num):
         next_state, reward, terminated, truncated, _ = eval_env.step(action)
         done = terminated or truncated
         
-        # Calculate the same custom rewards for consistency in reporting
+        # Calculate custom rewards for consistency in reporting
         MAX_ANGLE = 0.2095
-        MAX_VELOCITY = 2.0
+        MAX_POSITION = 2.4  # Maximum cart position
         
-        cart_velocity = next_state[1]
-        pole_angle = next_state[2]
+        cart_position = next_state[0]  # Cart position
+        pole_angle = next_state[2]     # Pole angle
         
+        # Calculate reward components
         angle_reward = 1.0 - (abs(pole_angle) / MAX_ANGLE)
-        velocity_reward = max(0, 1.0 - (abs(cart_velocity) / MAX_VELOCITY))
+        position_reward = max(0, 1.0 - (abs(cart_position) / MAX_POSITION))  # Higher when closer to center
         
-        custom_reward = 0.7 * angle_reward + 0.3 * velocity_reward
+        # Combined reward (weighted 70% angle, 30% position)
+        custom_reward = 0.7 * angle_reward + 0.3 * position_reward
         
         if done and score < 499:
             custom_reward = -10
@@ -207,17 +269,18 @@ def run_evaluation_episode(env, agent, episode_num):
 
 def main():
     MAX_ANGLE = 0.2095  # Maximum angle before termination (in radians)
-    MAX_VELOCITY = 2.0  # Reasonable maximum cart velocity threshold
+    MAX_POSITION = 2.4  # Maximum cart position
 
-    # Create environment without rendering for training
+    # Create environment with our wrapping for training
     env = gym.make('CartPole-v1')
+    env = CartPoleCenteringWrapper(env)
     
-    # Get environment information
+    # Get environment information (state size remains the same with our wrapper)
     state_size = env.observation_space.shape[0]
     action_size = env.action_space.n
     
     # Create agent
-    agent = DQNAgent(state_size, action_size, global_step)
+    agent = DQNAgent(state_size, action_size, global_step, log_dir, INITIAL_MODEL_PATH)
     
     # Training parameters
     EPISODES = 500
@@ -226,10 +289,15 @@ def main():
     scores = []
     avg_scores = []
     
+    # Track training time
+    training_start_time = time.time()
+    
     for e in range(EPISODES):
-        # Every 10th episode, run an evaluation with rendering
+
+        # Every 10th episode, run an evaluation with rendering, and save the model
         if (e==0 or e > 50) and e % 10 == 0:
             eval_score, eval_reward = run_evaluation_episode(env, agent, e)
+            agent.save_model(e)
         
         # Reset environment for training
         state, _ = env.reset()
@@ -237,8 +305,8 @@ def main():
         done = False
         score = 0
         episode_rewards = []  # Track all rewards for episode statistics
-        episode_loss = []  # Track all losses for episode statistics
-
+        episode_loss = []     # Track all losses for episode statistics
+        episode_start_time = time.time()  # Track episode start time
         
         while not done:
             # Select action
@@ -249,17 +317,15 @@ def main():
             done = terminated or truncated
             
             # Extract values for custom reward
-            cart_position = next_state[0]  # Not used directly in reward
-            cart_velocity = next_state[1]  # Used for velocity component
+            cart_position = next_state[0]  # Used for position component
             pole_angle = next_state[2]     # Used for angle component
-            pole_velocity = next_state[3]  # Not used directly in reward
             
             # Calculate custom reward components
             angle_reward = 1.0 - (abs(pole_angle) / MAX_ANGLE)  # 1.0 when vertical, 0.0 at maximum angle
-            velocity_reward = max(0, 1.0 - (abs(cart_velocity) / MAX_VELOCITY))  # 1.0 when stationary
+            position_reward = max(0, 1.0 - (abs(cart_position) / MAX_POSITION))  # 1.0 when centered
             
-            # Combined reward (weighted 70% angle, 30% velocity)
-            custom_reward = 0.7 * angle_reward + 0.3 * velocity_reward
+            # Combined reward (weighted 70% angle, 30% position)
+            custom_reward = 0.7 * angle_reward + 0.3 * position_reward
             
             # Apply termination penalty if the episode ended early (not due to max steps)
             if done and score < 499:
@@ -278,7 +344,7 @@ def main():
             score += 1
             
             # Train on past experiences (replay) after each fourth step
-            if score%4==0:
+            if score % 4 == 0:
                 episode_loss.append(agent.replay())
             
             # Increment global step
@@ -287,7 +353,10 @@ def main():
             if done:
                 break
         
-
+        # Calculate episode time
+        episode_time = time.time() - episode_start_time
+        total_training_time = time.time() - training_start_time
+        
         # Update target model periodically
         if e % agent.update_target_frequency == 0:
             agent.update_target_model()
@@ -304,20 +373,49 @@ def main():
         avg_reward = np.mean(episode_rewards) if episode_rewards else 0 
 
         # Calculate average loss per step for this episode
-        avg_loss = np.mean(episode_loss) if episode_loss else 0
+        avg_loss = np.mean([l for l in episode_loss if l is not None]) if episode_loss else 0
+
+        # Update epsilon
+        if agent.epsilon > agent.epsilon_min:
+            agent.epsilon *= agent.epsilon_decay
         
-        print(f"Episode: {e}/{EPISODES}, Score: {score}, Avg Score: {avg_score:.2f}, " +
-              f"Avg Reward: {avg_reward:.2f}, Epsilon: {agent.epsilon:.2f}, Avg Loss: {avg_loss:.2f}")
+        # Format times for display
+        total_hours, remainder = divmod(total_training_time, 3600)
+        total_minutes, total_seconds = divmod(remainder, 60)
+        episode_minutes, episode_seconds = divmod(episode_time, 60)
+        
+        # Print progress with training time
+        print(f"Episode: {e}/{EPISODES}, Score: {score}, Avg: {avg_score:.2f}, " +
+              f"Avg Reward: {avg_reward:.2f}, Epsilon: {agent.epsilon:.2f}, Avg Loss: {avg_loss:.4f}, Time: {int(total_hours)}h {int(total_minutes)}m {total_seconds:.2f}s")
+			
+        # Write to TensorBoard
+        with summary_writer.as_default():
+            tf.summary.scalar('score', score, step=e)
+            tf.summary.scalar('avg_score_100', avg_score, step=e)
+            tf.summary.scalar('avg_reward', avg_reward, step=e)
+            tf.summary.scalar('epsilon', agent.epsilon, step=e)
+            tf.summary.scalar('avg_loss', avg_loss, step=e)
+            tf.summary.scalar('episode_time_seconds', episode_time, step=e)
         
         # If we've solved the environment (avg score >= 195 over 100 episodes), stop
         if len(scores) >= 100 and avg_score >= 195:
             print(f"Environment solved in {e} episodes! Average score: {avg_score:.2f}")
+            # Save final model
+            agent.save_model("final")
             break
     
-    agent.model.save('trained_cartpole_model.keras')
+    # Save final model regardless
+    agent.model.save(os.path.join(log_dir, 'trained_cartpole_model_final.keras'))
+    print(f"Final model saved to: {os.path.join(log_dir, 'trained_cartpole_model_final.keras')}")
 
     # Close environment
     env.close()
+    
+    # Report final training time
+    total_training_time = time.time() - training_start_time
+    hours, remainder = divmod(total_training_time, 3600)
+    minutes, seconds = divmod(remainder, 60)
+    print(f"Total training time: {int(hours)}h {int(minutes)}m {seconds:.2f}s")
 
 if __name__ == "__main__":
     main()
