@@ -77,3 +77,8 @@ Next I want to use a deep Q network to replace the q table with a NN that approx
 					- experiences with large differences between predicted Q and target Q are prioritized for batch selection
 			- I will start by implementing smaller batches, replay buffer, higher learning rate, epsilon decay, min learning rate
 				- none of that helped
+
+		- The "last mile" of training isn't going well. It can't just stay balanced forever. I really wonder why
+			- training also goes backwards sometimes. I had a model that scored a perfect 500 for 10 episodes in a row! then it regressed, getting scores around 250.
+				- I think this is because the older data with worse angles/velocities fell out of the memory window
+					- I will try increasing the window dramatically. No reason not to. 

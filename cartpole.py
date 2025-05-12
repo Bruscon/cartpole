@@ -26,14 +26,14 @@ pr.enable()
 # Suppress TensorFlow warnings
 #tf.compat.v1.logging.set_verbosity(tf.compat.v1.logging.ERROR)
 
-#use mixed precision to encourage GPU usage
-policy = tf.keras.mixed_precision.Policy('mixed_float16')
-tf.keras.mixed_precision.set_global_policy(policy)
+# #use mixed precision 
+# policy = tf.keras.mixed_precision.Policy('mixed_float16')
+# tf.keras.mixed_precision.set_global_policy(policy)
 
 #allows GPU memory to be allocated as needed
 tf.config.experimental.set_memory_growth(tf.config.list_physical_devices('GPU')[0], True)
 
-# Check for GPU
+# Make sure we're using my beast of a GPU (NVIDIA RTX 3090 with 24GB of VRAM)
 if verbose > 1:
     print("TensorFlow version:", tf.__version__)
     print("GPU Available:", tf.config.list_physical_devices('GPU'))
@@ -75,32 +75,6 @@ global_step = tf.Variable(0, trainable=False, dtype=tf.int64)
 # Create TensorBoard writer
 summary_writer = tf.summary.create_file_writer(log_dir)
 
-
-class CartPoleCenteringWrapper(ObservationWrapper):
-    """
-    Wrapper that adds normalized distance from cart center as an additional observation.
-    This helps the agent learn to keep the cart centered.
-    """
-    def __init__(self, env):
-        super().__init__(env)
-        # Update observation space to include normalized distance from center
-        old_shape = env.observation_space.shape
-        self.observation_space = spaces.Box(
-            low=-np.inf, 
-            high=np.inf, 
-            shape=(old_shape[0],),  # Keep same dimension as we'll normalize the position
-            dtype=np.float32
-        )
-        
-        # Track max position for normalization
-        self.max_position = 2.4  # CartPole max position
-    
-    def observation(self, observation):
-        # We don't actually modify the observation here, just make sure it's normalized
-        # Cart position is already at index 0, and pole angle at index 2
-        return observation
-
-
 class DQNAgent:
     def __init__(self, state_size, action_size, global_step, log_dir, initial_model_path=None):
         self.state_size = state_size
@@ -110,15 +84,15 @@ class DQNAgent:
         self.initial_model_path = initial_model_path
         
         # Hyperparameters
-        self.memory = deque(maxlen=3000)  # Experience replay buffer
-        self.gamma = 0.98                  # Discount factor
+        self.memory = deque(maxlen=50_000) # Experience replay buffer
+        self.gamma = 0.99                  # Discount factor
         self.epsilon = 1.0                 # Exploration rate
-        self.epsilon_min = 0.01            # Minimum exploration probability
-        self.epsilon_decay = 0.996         # Exponential decay rate for exploration
-        self.learning_rate = 0.002         # Learning rate
-        self.batch_size = 1024             # Size of batches for training
+        self.epsilon_min = 0.005           # Minimum exploration probability
+        self.epsilon_decay = 0.998         # Exponential decay rate for exploration
+        self.learning_rate = 0.01         # Learning rate
+        self.batch_size = 2048             # Size of batches for training
         self.train_start = self.batch_size # Minimum experiences before training
-        self.update_target_frequency = 1   # How often to update target network (episodes)
+        self.update_target_frequency = 5   # How often to update target network (episodes)
         
         # Explicit optimizer config with correct policy
         self.optimizer = Adam(learning_rate=self.learning_rate)
@@ -153,7 +127,7 @@ class DQNAgent:
             Dense(24, activation='relu'),
             Dense(self.action_size, activation='linear')
         ])
-        model.compile(loss='mse', optimizer=self.optimizer)
+        model.compile(loss=Huber(delta=10.0), optimizer=self.optimizer)
         return model
     
     def update_target_model(self):
@@ -163,10 +137,6 @@ class DQNAgent:
     def remember(self, state, action, reward, next_state, done):
         """Store experience in memory"""
         self.memory.append((state, action, reward, next_state, done))
-
-        # decay epsilon only if training has started 
-        if (len(self.memory) > self.train_start) and (self.epsilon > self.epsilon_min):
-            self.epsilon *= self.epsilon_decay
     
     def act(self, state, eval_mode=False):
         """Epsilon-greedy action selection, with option for pure exploitation"""
@@ -181,6 +151,61 @@ class DQNAgent:
     def predict_batch(self, states):
         return self.model(states)  # Note: using direct call, not predict()
     
+    @tf.function(experimental_relax_shapes=True)
+    def _compute_targets(self, states, actions, rewards, next_states, dones):
+        """Compute Q-value targets using TensorFlow operations"""
+        # Define the compute dtype based on global policy
+        compute_dtype = tf.float32
+        
+        # Convert inputs to tensors with explicit casting
+        states = tf.cast(tf.convert_to_tensor(states), compute_dtype)
+        next_states = tf.cast(tf.convert_to_tensor(next_states), compute_dtype)
+        rewards = tf.cast(tf.convert_to_tensor(rewards), compute_dtype)
+        actions = tf.cast(tf.convert_to_tensor(actions), tf.int32)
+        dones = tf.cast(tf.convert_to_tensor(dones), tf.bool)
+        
+        # Get current Q values
+        current_q = tf.cast(self.model(states), compute_dtype)
+        
+        # Get next Q values from target network
+        next_q_values = tf.cast(self.target_model(next_states), compute_dtype)
+        
+        # For DDQN, get actions from main network
+        model_next_q = tf.cast(self.model(next_states), compute_dtype)
+        next_actions = tf.cast(tf.argmax(model_next_q, axis=1), tf.int32)
+        
+        # Create indices for gathering values
+        batch_size = tf.shape(states)[0]
+        batch_indices = tf.range(batch_size, dtype=tf.int32)
+        action_indices = tf.stack([batch_indices, actions], axis=1)
+        next_action_indices = tf.stack([batch_indices, next_actions], axis=1)
+        
+        # Gather the Q-values for the actions taken
+        q_values = tf.gather_nd(current_q, action_indices)
+        
+        # Gather the Q-values for the next best actions
+        next_q = tf.gather_nd(next_q_values, next_action_indices)
+        
+        # Cast all variables to compute_dtype to ensure compatibility
+        gamma = tf.cast(self.gamma, compute_dtype)
+        next_q = tf.cast(next_q, compute_dtype)
+        rewards = tf.cast(rewards, compute_dtype)
+        
+        # Create the targets
+        # For terminal states, target is just the reward
+        # For non-terminal states, target is reward + gamma * next_q
+        done_mask = tf.cast(dones, compute_dtype)
+        targets = rewards + (1.0 - done_mask) * gamma * next_q
+        
+        # Create a copy of current_q for updating specific actions
+        updated_q_values = current_q
+        
+        # Update only the relevant action values using scatter_nd
+        indices = action_indices
+        updates = targets
+        updated_q_values = tf.tensor_scatter_nd_update(updated_q_values, indices, updates)
+        
+        return updated_q_values
 
     def replay(self):
         """Train the network using randomly sampled experiences with vectorized operations"""
@@ -191,34 +216,15 @@ class DQNAgent:
         # Sample a random batch from memory
         minibatch = random.sample(self.memory, self.batch_size)
         
-        # Extract batches using vectorized operations
-        states = np.array([experience[0][0] for experience in minibatch])
-        actions = np.array([experience[1] for experience in minibatch])
-        rewards = np.array([experience[2] for experience in minibatch])
-        next_states = np.array([experience[3][0] for experience in minibatch])
-        dones = np.array([experience[4] for experience in minibatch])
-        
-        # Get all predictions in single batched operations
-        targets = self.model.predict(states, verbose=0, batch_size=self.batch_size)
-        next_q_values = self.model.predict(next_states, verbose=0, batch_size=self.batch_size)
-        target_q_values = self.target_model.predict(next_states, verbose=0, batch_size=self.batch_size)
-        
-        # Get max actions from main model predictions (already computed)
-        max_actions = np.argmax(next_q_values, axis=1)
-        
-        # Create action indices for efficient batch update
-        batch_indices = np.arange(self.batch_size)
-        
-        # Vectorized update for targets
-        # Start with the rewards
-        target_values = rewards.copy()
-        
-        # For non-terminal states, add the discounted future reward
-        non_terminal_mask = ~dones
-        target_values[non_terminal_mask] += self.gamma * target_q_values[non_terminal_mask, max_actions[non_terminal_mask]]
-        
-        # Update only the specific action values using advanced indexing
-        targets[batch_indices, actions] = target_values
+        # Extract batches using vectorized operations with explicit dtype
+        states = np.array([experience[0][0] for experience in minibatch], dtype=np.float32)
+        actions = np.array([experience[1] for experience in minibatch], dtype=np.int32)
+        rewards = np.array([experience[2] for experience in minibatch], dtype=np.float32)
+        next_states = np.array([experience[3][0] for experience in minibatch], dtype=np.float32)
+        dones = np.array([experience[4] for experience in minibatch], dtype=np.bool_)
+
+        # Use TensorFlow to compute target Q-values
+        targets = self._compute_targets(states, actions, rewards, next_states, dones)
         
         # Train the network with optimized batch processing
         history = self.model.fit(
@@ -229,6 +235,11 @@ class DQNAgent:
             batch_size=self.batch_size
         )
         
+
+        # decay epsilon only if training has started 
+        if (len(self.memory) > self.train_start) and (self.epsilon > self.epsilon_min):
+            self.epsilon *= self.epsilon_decay
+
         # Increment global step and track loss
         loss = history.history['loss'][0]
             
@@ -254,7 +265,7 @@ def run_evaluation_episode(env, agent, episode_num):
         eval_env = gym.make('CartPole-v1', render_mode='human')
     else:
         eval_env = gym.make('CartPole-v1')
-    eval_env = CartPoleCenteringWrapper(eval_env)  # Apply the wrapper
+
     eval_state, _ = eval_env.reset()
     eval_state = np.reshape(eval_state, [1, agent.state_size])
     
@@ -281,7 +292,7 @@ def run_evaluation_episode(env, agent, episode_num):
         custom_reward = 0.7 * angle_reward + 0.3 * position_reward
         
         if done and score < 499:
-            custom_reward = -10
+            custom_reward = -1
             
         rewards.append(custom_reward)
         eval_state = np.reshape(next_state, [1, agent.state_size])
@@ -301,7 +312,6 @@ def main():
 
     # Create environment with our wrapping for training
     env = gym.make('CartPole-v1')
-    env = CartPoleCenteringWrapper(env)
     
     # Get environment information (state size remains the same with our wrapper)
     state_size = env.observation_space.shape[0]
@@ -413,7 +423,7 @@ def main():
         
         # Print progress with training time
         print(f"Episode: {e}, Score: {score}, Avg: {avg_score:.2f}, " +
-              f"Avg Reward: {avg_reward:.2f}, Epsilon: {agent.epsilon:.2f}, Avg Loss: {avg_loss:.4f}, Time: {int(total_hours)}h {int(total_minutes)}m {total_seconds:.2f}s")
+              f"Avg Reward: {avg_reward:.2f}, Epsilon: {agent.epsilon:.3f}, Avg Loss: {avg_loss:.4f}, Time: {int(total_hours)}h {int(total_minutes)}m {total_seconds:.2f}s")
 			
         # Write to TensorBoard
         with summary_writer.as_default():
