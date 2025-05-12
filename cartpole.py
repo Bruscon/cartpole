@@ -88,14 +88,14 @@ class DQNAgent:
         self.gamma = 0.99                  # Discount factor
         self.epsilon = 1.0                 # Exploration rate
         self.epsilon_min = 0.005           # Minimum exploration probability
-        self.epsilon_decay = 0.998         # Exponential decay rate for exploration
+        self.epsilon_decay = 0.99          # Exponential decay rate for exploration
         self.batch_size = 2048             # Size of batches for training
         self.train_start = self.batch_size # Minimum experiences before training
         self.update_target_frequency = 5   # How often to update target network (episodes)
 
         self.learning_rate = .04           # Initial learning rate
         self.min_learning_rate = 0.001     # Minimum learning rate
-        self.learning_rate_decay = .999    # learning rate decay 
+        self.learning_rate_decay = .998    # learning rate decay 
         
         # Explicit optimizer config with correct policy
         self.optimizer = Adam(learning_rate=self.learning_rate, clipnorm=1.0)
@@ -233,7 +233,7 @@ class DQNAgent:
         history = self.model.fit(
             states, 
             targets, 
-            epochs=1, 
+            epochs=10, 
             verbose=0, 
             batch_size=self.batch_size
         )
@@ -381,7 +381,7 @@ def main():
             
             # Apply termination penalty if the episode ended early (not due to max steps)
             if done and score < 499:
-                custom_reward = -10  # Maintain the same severe penalty for early termination
+                custom_reward = -1
             
             next_state = np.reshape(next_state, [1, state_size])
             
@@ -396,7 +396,7 @@ def main():
             score += 1
             
             # Train on past experiences (replay) every X steps
-            if score % 10 == 0:
+            if score % 8 == 0:
                 episode_loss.append(agent.replay())
             
             # Increment global step
