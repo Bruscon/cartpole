@@ -49,17 +49,31 @@ Next I want to use a deep Q network to replace the q table with a NN that approx
 					- its getting worse as it trains. 
 						- had a gigantic breakthrough at episode 61. Will let it get to next eval 
 
-		-TODO: more changes to reward function. Punished for displacement from center instead of cart velocity. 
-
+		-TODO: more changes to reward function. Punished for displacement from center instead of cart velocity. DONE
 
 		-TODO: add a function to save off a model at any time
 
-		-TODO: track elapsed time
+		-TODO: track elapsed time DONE
 
 		- I still don't understand why episodes take longer and longer to train. batch sizes don't grow even if the deque fills up. It seems like somethings wrong.
 			- dequeue isnt filling up. Only at 3300 by episode 100. I will try reducing the max size and see if that helps speed or just hurts training. 
 				- Yeah, I don't think it affects the training speed. The later episodes take longer because they last for more steps, which means it does more training iterations. The dequeue length probably affects memory usage but thats about it
 					- Actually, I wonder if the earlier training data being in the deque means its training on old data. WOuld it do better if all the data came from later iterations with a better trained model? 
-						- I should have all training runs start with the same untrained model for better comparison. 
+						- I should have all training runs start with the same untrained model for better comparison. DONE
 
 		- I had claude do most of those TODO's. It's so good now! The evaluation run hit 495 on episode 100 after only 12 minutes of training!
+
+		- It take approx 30 mins to beat the environment. My intuition is that this could be much faster. 
+			- Claude suggested:
+				- higher gamma
+				- smaller batches
+				- smaller replay buffer
+				- Smaller network (on single layer (linear) with 8-16 neurons)
+				- higher learning rate (.005 to .01)
+				- much faster epsilon decay 
+				- more frequent target network updates
+				- simpler reward function (not gonna do this one)
+				- PRIORITIZED REPLAY BUFFER
+					- experiences with large differences between predicted Q and target Q are prioritized for batch selection
+			- I will start by implementing smaller batches, replay buffer, higher learning rate, epsilon decay, min learning rate
+				- none of that helped

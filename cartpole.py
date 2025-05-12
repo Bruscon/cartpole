@@ -14,14 +14,21 @@ import shutil
 from gymnasium import spaces
 from gymnasium.core import ObservationWrapper
 import argparse
+import cProfile
+import pstats
 
 verbose = 1
 
+# Enable profiling
+pr = cProfile.Profile()
+pr.enable()
+
 # Suppress TensorFlow warnings
-tf.compat.v1.logging.set_verbosity(tf.compat.v1.logging.ERROR)
+#tf.compat.v1.logging.set_verbosity(tf.compat.v1.logging.ERROR)
 
 #use mixed precision to encourage GPU usage
-tf.keras.mixed_precision.set_global_policy('mixed_float16')
+policy = tf.keras.mixed_precision.Policy('mixed_float16')
+tf.keras.mixed_precision.set_global_policy(policy)
 
 #allows GPU memory to be allocated as needed
 tf.config.experimental.set_memory_growth(tf.config.list_physical_devices('GPU')[0], True)
@@ -37,6 +44,7 @@ if verbose > 1:
 parser = argparse.ArgumentParser(description='DQN training for CartPole')
 parser.add_argument('--log-dir', type=str, help='Directory for logs')
 parser.add_argument('--model', type=str, help='Path to initial model')
+parser.add_argument('--graphics', action='store_true', default=False, help='Whether evaluation episodes should be rendered graphically')
 args = parser.parse_args()
 
 # Use the log directory if provided, otherwise create one
@@ -102,22 +110,33 @@ class DQNAgent:
         self.initial_model_path = initial_model_path
         
         # Hyperparameters
-        self.memory = deque(maxlen=20000)   # Experience replay buffer
-        self.gamma = 0.9                   # Discount factor
+        self.memory = deque(maxlen=3000)  # Experience replay buffer
+        self.gamma = 0.98                  # Discount factor
         self.epsilon = 1.0                 # Exploration rate
         self.epsilon_min = 0.01            # Minimum exploration probability
-        self.epsilon_decay = 0.995         # Exponential decay rate for exploration
-        self.learning_rate = 0.001         # Learning rate
-        self.batch_size = 128              # Size of batches for training
-        self.train_start = 1000            # Minimum experiences before training
-        self.update_target_frequency = 10  # How often to update target network (episodes)
+        self.epsilon_decay = 0.996         # Exponential decay rate for exploration
+        self.learning_rate = 0.002         # Learning rate
+        self.batch_size = 1024             # Size of batches for training
+        self.train_start = self.batch_size # Minimum experiences before training
+        self.update_target_frequency = 1   # How often to update target network (episodes)
         
+        # Explicit optimizer config with correct policy
+        self.optimizer = Adam(learning_rate=self.learning_rate)
+        if tf.keras.mixed_precision.global_policy().name == 'mixed_float16':
+            # Wrap optimizer for mixed precision
+            self.optimizer = tf.keras.mixed_precision.LossScaleOptimizer(self.optimizer)
+
         # Load or build the main model
         if initial_model_path and os.path.exists(initial_model_path):
             print(f"Loading initial model from: {initial_model_path}")
-            self.model = tf.keras.models.load_model(initial_model_path)
+            self.model = self._build_model()  # Create a fresh model with our architecture
+            # Only load weights, not the optimizer state
+            temp_model = tf.keras.models.load_model(initial_model_path)
+            self.model.set_weights(temp_model.get_weights())
+            del temp_model  # Free memory
         else:
             self.model = self._build_model()
+
         
         # Target model - used for more stable Q-value predictions
         self.target_model = self._build_model()
@@ -129,11 +148,12 @@ class DQNAgent:
     def _build_model(self):
         """Neural Network for Deep-Q learning Model"""
         model = Sequential([
-            Dense(24, input_dim=self.state_size, activation='relu'),
+            Input(shape=(self.state_size,)),
+            Dense(24, activation='relu'),
             Dense(24, activation='relu'),
             Dense(self.action_size, activation='linear')
         ])
-        model.compile(loss='mse', optimizer=Adam(learning_rate=self.learning_rate))
+        model.compile(loss='mse', optimizer=self.optimizer)
         return model
     
     def update_target_model(self):
@@ -143,6 +163,10 @@ class DQNAgent:
     def remember(self, state, action, reward, next_state, done):
         """Store experience in memory"""
         self.memory.append((state, action, reward, next_state, done))
+
+        # decay epsilon only if training has started 
+        if (len(self.memory) > self.train_start) and (self.epsilon > self.epsilon_min):
+            self.epsilon *= self.epsilon_decay
     
     def act(self, state, eval_mode=False):
         """Epsilon-greedy action selection, with option for pure exploitation"""
@@ -150,9 +174,14 @@ class DQNAgent:
             return random.randrange(self.action_size)
         
         # Get Q-values for all actions in current state
-        q_values = self.model.predict(state, verbose=0)
+        q_values = self.predict_batch(state).numpy()
         return np.argmax(q_values[0])
+
+    @tf.function
+    def predict_batch(self, states):
+        return self.model(states)  # Note: using direct call, not predict()
     
+
     def replay(self):
         """Train the network using randomly sampled experiences with vectorized operations"""
         # Check if we have enough experiences
@@ -220,13 +249,14 @@ def run_evaluation_episode(env, agent, episode_num):
     score = 0
     rewards = []
     
-    # Create rendering environment
-    eval_env = gym.make('CartPole-v1', render_mode='human')
+    # Create rendering environment if graphics are enabled
+    if args.graphics:
+        eval_env = gym.make('CartPole-v1', render_mode='human')
+    else:
+        eval_env = gym.make('CartPole-v1')
     eval_env = CartPoleCenteringWrapper(eval_env)  # Apply the wrapper
     eval_state, _ = eval_env.reset()
     eval_state = np.reshape(eval_state, [1, agent.state_size])
-    
-    print(f"\n--- VISUAL EVALUATION (Episode {episode_num}) ---")
     
     while not done:
         # Use model without exploration (epsilon=0)
@@ -258,10 +288,8 @@ def run_evaluation_episode(env, agent, episode_num):
         score += 1
     
     avg_reward = np.mean(rewards) if rewards else 0
-    print(f"Evaluation Score: {score}, Avg Reward: {avg_reward:.4f}")
-    print("--- END OF EVALUATION ---\n")
+    print(f"--- EVALUATION Score: {score}, Avg Reward: {avg_reward:.4f}")
     
-    # Close the rendering environment
     eval_env.close()
     
     return score, avg_reward
@@ -282,8 +310,7 @@ def main():
     # Create agent
     agent = DQNAgent(state_size, action_size, global_step, log_dir, INITIAL_MODEL_PATH)
     
-    # Training parameters
-    EPISODES = 500
+    EPISODES = 100000
     
     # Keep track of rewards per episode
     scores = []
@@ -294,11 +321,11 @@ def main():
     
     for e in range(EPISODES):
 
-        # Every 10th episode, run an evaluation with rendering, and save the model
-        if (e==0 or e > 50) and e % 10 == 0:
+        # Every 10th episode, run an evaluation and save the model
+        if e % 10 == 0:
             eval_score, eval_reward = run_evaluation_episode(env, agent, e)
             agent.save_model(e)
-        
+
         # Reset environment for training
         state, _ = env.reset()
         state = np.reshape(state, [1, state_size])
@@ -343,8 +370,8 @@ def main():
             episode_rewards.append(custom_reward)
             score += 1
             
-            # Train on past experiences (replay) after each fourth step
-            if score % 4 == 0:
+            # Train on past experiences (replay) every X steps
+            if score % 2 == 0:
                 episode_loss.append(agent.replay())
             
             # Increment global step
@@ -360,24 +387,24 @@ def main():
         # Update target model periodically
         if e % agent.update_target_frequency == 0:
             agent.update_target_model()
-            print(f"Episode: {e}/{EPISODES}, Target model updated")
+            print("Target model updated")
         
         # Save scores
         scores.append(score)
         
-        # Calculate average score of last 100 episodes
-        avg_score = np.mean(scores[-100:])
+        # Calculate average score of last 10 episodes
+        avg_score = np.mean(scores[-10:])
         avg_scores.append(avg_score)
+
+        #environment is considered solved when rolling average of last 10 scores breaks 200
+        if avg_score >= 200:
+            print("Environment solved!")
         
         # Calculate average reward per step for this episode
         avg_reward = np.mean(episode_rewards) if episode_rewards else 0 
 
         # Calculate average loss per step for this episode
         avg_loss = np.mean([l for l in episode_loss if l is not None]) if episode_loss else 0
-
-        # Update epsilon
-        if agent.epsilon > agent.epsilon_min:
-            agent.epsilon *= agent.epsilon_decay
         
         # Format times for display
         total_hours, remainder = divmod(total_training_time, 3600)
@@ -385,7 +412,7 @@ def main():
         episode_minutes, episode_seconds = divmod(episode_time, 60)
         
         # Print progress with training time
-        print(f"Episode: {e}/{EPISODES}, Score: {score}, Avg: {avg_score:.2f}, " +
+        print(f"Episode: {e}, Score: {score}, Avg: {avg_score:.2f}, " +
               f"Avg Reward: {avg_reward:.2f}, Epsilon: {agent.epsilon:.2f}, Avg Loss: {avg_loss:.4f}, Time: {int(total_hours)}h {int(total_minutes)}m {total_seconds:.2f}s")
 			
         # Write to TensorBoard
@@ -396,13 +423,11 @@ def main():
             tf.summary.scalar('epsilon', agent.epsilon, step=e)
             tf.summary.scalar('avg_loss', avg_loss, step=e)
             tf.summary.scalar('episode_time_seconds', episode_time, step=e)
-        
-        # If we've solved the environment (avg score >= 195 over 100 episodes), stop
-        if len(scores) >= 100 and avg_score >= 195:
-            print(f"Environment solved in {e} episodes! Average score: {avg_score:.2f}")
-            # Save final model
-            agent.save_model("final")
-            break
+
+        # #profiling stats
+        # stats = pstats.Stats(pr)
+        # stats.sort_stats('cumtime')  # Sort by cumulative time
+        # stats.print_stats(5)  # Print top 5 time-consuming functions
     
     # Save final model regardless
     agent.model.save(os.path.join(log_dir, 'trained_cartpole_model_final.keras'))

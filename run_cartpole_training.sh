@@ -11,6 +11,7 @@ mkdir -p "$log_dir"
 source ~/rl-env/bin/activate
 
 # Run the script with the log directory as an argument and capture output
-python -u cartpole.py --log-dir="$log_dir" --model="saved_models/initial_model.keras" 2>&1 | tee "${log_dir}/run_transcript.log"
+python -u -i cartpole.py --log-dir="$log_dir" --model="saved_models/initial_model.keras" 2>&1 | tee "${log_dir}/run_transcript.log"
 
 # -u argument means "unbuffered" so output goes straight to the terminal
+# add a --graphics=True to render on every tenth episode
