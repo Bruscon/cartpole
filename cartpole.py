@@ -89,13 +89,16 @@ class DQNAgent:
         self.epsilon = 1.0                 # Exploration rate
         self.epsilon_min = 0.005           # Minimum exploration probability
         self.epsilon_decay = 0.998         # Exponential decay rate for exploration
-        self.learning_rate = 0.01         # Learning rate
         self.batch_size = 2048             # Size of batches for training
         self.train_start = self.batch_size # Minimum experiences before training
         self.update_target_frequency = 5   # How often to update target network (episodes)
+
+        self.learning_rate = .04           # Initial learning rate
+        self.min_learning_rate = 0.001     # Minimum learning rate
+        self.learning_rate_decay = .999    # learning rate decay 
         
         # Explicit optimizer config with correct policy
-        self.optimizer = Adam(learning_rate=self.learning_rate)
+        self.optimizer = Adam(learning_rate=self.learning_rate, clipnorm=1.0)
         if tf.keras.mixed_precision.global_policy().name == 'mixed_float16':
             # Wrap optimizer for mixed precision
             self.optimizer = tf.keras.mixed_precision.LossScaleOptimizer(self.optimizer)
@@ -240,6 +243,18 @@ class DQNAgent:
         if (len(self.memory) > self.train_start) and (self.epsilon > self.epsilon_min):
             self.epsilon *= self.epsilon_decay
 
+        #decay learning rate
+        if self.learning_rate > self.min_learning_rate:
+            self.learning_rate *= self.learning_rate_decay
+    
+        # Check if optimizer is wrapped in LossScaleOptimizer
+        if hasattr(self.optimizer, 'inner_optimizer'):
+            # For mixed precision with LossScaleOptimizer wrapper
+            self.optimizer.inner_optimizer.learning_rate.assign(self.learning_rate)
+        else:
+            # For standard optimizer
+            self.optimizer.learning_rate.assign(self.learning_rate)
+
         # Increment global step and track loss
         loss = history.history['loss'][0]
             
@@ -291,8 +306,8 @@ def run_evaluation_episode(env, agent, episode_num):
         # Combined reward (weighted 70% angle, 30% position)
         custom_reward = 0.7 * angle_reward + 0.3 * position_reward
         
-        if done and score < 499:
-            custom_reward = -1
+        # if done and score < 499:
+        #     custom_reward = -1
             
         rewards.append(custom_reward)
         eval_state = np.reshape(next_state, [1, agent.state_size])
@@ -381,7 +396,7 @@ def main():
             score += 1
             
             # Train on past experiences (replay) every X steps
-            if score % 2 == 0:
+            if score % 10 == 0:
                 episode_loss.append(agent.replay())
             
             # Increment global step
@@ -402,13 +417,10 @@ def main():
         # Save scores
         scores.append(score)
         
-        # Calculate average score of last 10 episodes
-        avg_score = np.mean(scores[-10:])
+        # Calculate average score of last 25 episodes
+        avg_score = np.mean(scores[-25:])
         avg_scores.append(avg_score)
 
-        #environment is considered solved when rolling average of last 10 scores breaks 200
-        if avg_score >= 200:
-            print("Environment solved!")
         
         # Calculate average reward per step for this episode
         avg_reward = np.mean(episode_rewards) if episode_rewards else 0 
@@ -423,7 +435,8 @@ def main():
         
         # Print progress with training time
         print(f"Episode: {e}, Score: {score}, Avg: {avg_score:.2f}, " +
-              f"Avg Reward: {avg_reward:.2f}, Epsilon: {agent.epsilon:.3f}, Avg Loss: {avg_loss:.4f}, Time: {int(total_hours)}h {int(total_minutes)}m {total_seconds:.2f}s")
+               f"Learn Rate: {agent.learning_rate:.4f}, Epsilon: {agent.epsilon:.3f}, Avg Loss: {avg_loss:.4f}, Time: {int(total_hours)}h {int(total_minutes)}m {total_seconds:.2f}s")
+        #f"Avg Reward: {avg_reward:.2f},
 			
         # Write to TensorBoard
         with summary_writer.as_default():
