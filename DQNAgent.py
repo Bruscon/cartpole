@@ -10,6 +10,8 @@ from collections import deque
 import os
 import random
 
+from TFReplayBuffer import TFReplayBuffer
+
 class DQNAgent:
     def __init__(self, state_size, action_size, log_dir, initial_model_path=None):
         self.state_size = state_size
@@ -18,7 +20,7 @@ class DQNAgent:
         self.initial_model_path = initial_model_path
         
         # Hyperparameters
-        self.memory = deque(maxlen=50_000) # Experience replay buffer
+        self.memory_len = 50_000           # Experience replay buffer
         self.gamma = 0.99                  # Discount factor
         self.epsilon = 1.0                 # Exploration rate
         self.epsilon_min = 0.05            # Minimum exploration probability
@@ -27,10 +29,13 @@ class DQNAgent:
         self.train_start = self.batch_size # Minimum experiences before training
         self.update_target_frequency = 5   # How often to update target network (episodes)
         self.learning_rate = .06           # Initial learning rate
-        self.learning_rate_decay = .998     # learning rate decay 
+        self.learning_rate_decay = .998    # learning rate decay 
         self.epochs = 10
+
+        # create memory object
+        self.memory = TFReplayBuffer(state_size, action_size, buffer_size=self.memory_len)
         
-        #learning rate scheduler for adam optimizer
+        # learning rate scheduler for adam optimizer
         self.lr_schedule = keras.optimizers.schedules.ExponentialDecay(
             initial_learning_rate=self.learning_rate,
             decay_steps=1,
@@ -83,6 +88,18 @@ class DQNAgent:
     def remember(self, state, action, reward, next_state, done):
         """Store experience in memory"""
         self.memory.append((state, action, reward, next_state, done))
+
+    def remember_batch(self, states, actions, rewards, next_states, dones):
+        """Store batch of experiences in memory"""
+        # Ensure everything is in the right shape and type
+        states = tf.cast(states, tf.float32)
+        actions = tf.cast(actions, tf.int32)
+        rewards = tf.cast(rewards, tf.float32)
+        next_states = tf.cast(next_states, tf.float32)
+        dones = tf.cast(dones, tf.bool)
+        
+        # Add batch to memory
+        self.memory.add(states, actions, rewards, next_states, dones)
     
     def act(self, state, eval_mode=False):
         """Epsilon-greedy action selection, with option for pure exploitation"""
@@ -92,6 +109,17 @@ class DQNAgent:
         # Get Q-values for all actions in current state
         q_values = self.predict_batch(state).numpy()
         return np.argmax(q_values[0])
+
+    @tf.function
+    def act_batch(self, states_batch, eval_mode=False):
+        """Batch version of act() for vectorized environments"""
+        if not eval_mode and tf.random.uniform(()) <= self.epsilon:
+            # For random actions, return dummy tensor - we'll handle random generation outside
+            return tf.zeros([tf.shape(states_batch)[0]], dtype=tf.int64) - 1
+        
+        # Get Q-values for all actions in batch of states
+        q_values = self.model(states_batch)
+        return tf.argmax(q_values, axis=1)  # Return tensor, not numpy array
 
     @tf.function
     def predict_batch(self, states):
@@ -156,18 +184,11 @@ class DQNAgent:
     def replay(self):
         """Train the network using randomly sampled experiences with vectorized operations"""
         # Check if we have enough experiences
-        if len(self.memory) < self.train_start:
-            return 0.0  # Return 0 loss if no training performed
+        if self.memory.current_size < self.train_start:
+            return 0.0 
         
         # Sample a random batch from memory
-        minibatch = random.sample(self.memory, self.batch_size)
-        
-        # Extract batches using vectorized operations with explicit dtype
-        states = np.array([experience[0][0] for experience in minibatch], dtype=np.float32)
-        actions = np.array([experience[1] for experience in minibatch], dtype=np.int32)
-        rewards = np.array([experience[2] for experience in minibatch], dtype=np.float32)
-        next_states = np.array([experience[3][0] for experience in minibatch], dtype=np.float32)
-        dones = np.array([experience[4] for experience in minibatch], dtype=np.bool_)
+        states, actions, rewards, next_states, dones = self.memory.sample(self.batch_size)
 
         # Use TensorFlow to compute target Q-values
         targets = self._compute_targets(states, actions, rewards, next_states, dones)
@@ -181,8 +202,8 @@ class DQNAgent:
             batch_size=self.batch_size
         )
         
-        # decay epsilon only if training has started 
-        if (len(self.memory) > self.train_start) and (self.epsilon > self.epsilon_min):
+        # decay epsilon 
+        if (self.epsilon > self.epsilon_min):
             self.epsilon *= self.epsilon_decay
 
         # This decays the learning rate

@@ -5,7 +5,6 @@ from tensorflow.keras.models import Sequential, clone_model
 from tensorflow.keras.layers import Dense, Input
 from tensorflow.keras.optimizers import Adam
 from tensorflow.keras.losses import Huber
-from tensorflow.keras.callbacks import TensorBoard
 from tensorflow import keras
 from collections import deque
 import random
@@ -18,7 +17,6 @@ import argparse
 import cProfile
 import pstats
 
-from TFReplayBuffer import TFReplayBuffer
 from DQNAgent import DQNAgent
 
 verbose = 1
@@ -73,14 +71,29 @@ script_archive_path = os.path.join(log_dir, script_name)
 shutil.copy2(script_path, script_archive_path)
 print(f"Script archived to: {script_archive_path}")
 
-# Create TensorBoard writer
-summary_writer = tf.summary.create_file_writer(log_dir)
+def print_memory_usage():
+    import psutil
+    import os
+    process = psutil.Process(os.getpid())
+    mem_info = process.memory_info()
+    print(f"System RAM usage: {mem_info.rss / (1024 * 1024):.2f} MB")
 
+def print_gpu_memory():
+    gpus = tf.config.list_physical_devices('GPU')
+    if gpus:
+        try:
+            mem_info = tf.config.experimental.get_memory_info('GPU:0')
+            print(f"GPU memory allocated: {mem_info['current'] / (1024 * 1024):.2f} MB")
+            print(f"GPU memory peak: {mem_info['peak'] / (1024 * 1024):.2f} MB")
+        except:
+            try:
+                mem_info = tf.experimental.get_memory_usage('GPU:0')
+                print(f"GPU memory usage: {mem_info / (1024 * 1024):.2f} MB")
+            except:
+                print("GPU memory usage unavailable")
 
-def run_evaluation_episode(env, agent, episode_num):
+def run_evaluation_episode(agent, episode_num):
     """Run a single evaluation episode with rendering and no training"""
-    state, _ = env.reset()
-    state = np.reshape(state, [1, agent.state_size])
     done = False
     score = 0
     rewards = []
@@ -96,10 +109,15 @@ def run_evaluation_episode(env, agent, episode_num):
     
     while not done:
         # Use model without exploration (epsilon=0)
-        action = agent.act(eval_state, eval_mode=True)
+        actions_tensor = agent.act_batch(tf.convert_to_tensor(eval_state, dtype=tf.float32), eval_mode=True)
+        action = actions_tensor.numpy()
+
+        # If the returned values are -1, replace with random actions
+        if (action < 0):
+            action = np.random.randint(0, agent.action_size)
         
         # Take action
-        next_state, reward, terminated, truncated, _ = eval_env.step(action)
+        next_state, reward, terminated, truncated, _ = eval_env.step(action[0])
         done = terminated or truncated
         
         # Calculate custom rewards for consistency in reporting
@@ -116,8 +134,8 @@ def run_evaluation_episode(env, agent, episode_num):
         # Combined reward (weighted 70% angle, 30% position)
         custom_reward = 0.7 * angle_reward + 0.3 * position_reward
         
-        # if done and score < 499:
-        #     custom_reward = -1
+        if done and score < 499:
+            custom_reward = -1
             
         rewards.append(custom_reward)
         eval_state = np.reshape(next_state, [1, agent.state_size])
@@ -135,12 +153,17 @@ def main():
     MAX_ANGLE = 0.2095  # Maximum angle before termination (in radians)
     MAX_POSITION = 2.4  # Maximum cart position
 
-    # Create environment with our wrapping for training
-    env = gym.make('CartPole-v1')
+    # Create a single environment first to get state/action dimensions
+    single_env = gym.make('CartPole-v1')
+    state_size = single_env.observation_space.shape[0]
+    action_size = single_env.action_space.n
+    single_env.close()
     
-    # Get environment information (state size remains the same with our wrapper)
-    state_size = env.observation_space.shape[0]
-    action_size = env.action_space.n
+    # Create environment, vectorized
+    n_envs = 16  
+    env_fns = [lambda: gym.make('CartPole-v1') for _ in range(n_envs)]
+    envs = gym.vector.AsyncVectorEnv(env_fns)
+    states, _ = envs.reset()
     
     # Create agent
     agent = DQNAgent(state_size, action_size, log_dir, INITIAL_MODEL_PATH)
@@ -148,8 +171,9 @@ def main():
     EPISODES = 100000
     
     # Keep track of rewards per episode
-    scores = []
-    avg_scores = []
+    avg_score = 0       # average from all environments on this one episode
+    avg_scores = []     # running list from each episode
+    running_avg_score=0 # average of last 25 episode averages
     
     # Track training time
     training_start_time = time.time()
@@ -158,59 +182,79 @@ def main():
 
         # Every 10th episode, run an evaluation and save the model
         if e % 10 == 0:
-            eval_score, eval_reward = run_evaluation_episode(env, agent, e)
+            eval_score, eval_reward = run_evaluation_episode( agent, e)
             agent.save_model(e)
 
         # Reset environment for training
-        state, _ = env.reset()
-        state = np.reshape(state, [1, state_size])
-        done = False
-        score = 0
+        states, _ = envs.reset()
+        dones = np.zeros(n_envs, dtype=bool)
+        scores = np.zeros(n_envs)
         episode_rewards = []  # Track all rewards for episode statistics
         episode_loss = []     # Track all losses for episode statistics
         episode_start_time = time.time()  # Track episode start time
+
+        # Track steps per environment
+        steps_per_env = np.zeros(n_envs, dtype=int)
+        total_steps = 0
+        max_steps = 500  # Maximum steps per episode
         
-        while not done:
-            # Select action
-            action = agent.act(state)
+        # An episode is now basically just 500 timesteps in each env that resets when the bar falls
+        target_steps_per_episode = max_steps*n_envs
+
+        while total_steps < target_steps_per_episode:
+
+            # Get actions for all environments
+            actions_tensor = agent.act_batch(tf.convert_to_tensor(states, dtype=tf.float32), eval_mode=False)
+            actions = actions_tensor.numpy()
+
+            # If the returned values are -1, replace with random actions
+            if np.any(actions < 0):
+                actions = np.random.randint(0, agent.action_size, size=states.shape[0])
             
-            # Take action
-            next_state, env_reward, terminated, truncated, _ = env.step(action)
-            done = terminated or truncated
+            # Take actions in all environments
+            next_states, rewards, terminations, truncations, infos = envs.step(actions)
+            dones = np.logical_or(terminations, truncations)
             
-            # Extract values for custom reward
-            cart_position = next_state[0]  # Used for position component
-            pole_angle = next_state[2]     # Used for angle component
+            # Calculate custom rewards (vectorized)
+            cart_positions = next_states[:, 0]
+            pole_angles = next_states[:, 2]
             
-            # Calculate custom reward components
-            angle_reward = 1.0 - (abs(pole_angle) / MAX_ANGLE)  # 1.0 when vertical, 0.0 at maximum angle
-            position_reward = max(0, 1.0 - (abs(cart_position) / MAX_POSITION))  # 1.0 when centered
+            angle_rewards = 1.0 - (np.abs(pole_angles) / MAX_ANGLE)
+            position_rewards = np.maximum(0, 1.0 - (np.abs(cart_positions) / MAX_POSITION))
             
-            # Combined reward (weighted 70% angle, 30% position)
-            custom_reward = 0.7 * angle_reward + 0.3 * position_reward
+            custom_rewards = 0.7 * angle_rewards + 0.3 * position_rewards
+
+            # Apply termination penalty - note that environments may auto-reset
+            # so we need to check the infos for terminal_observation if available
+            if "terminal_observation" in infos:
+                for i, term_obs in enumerate(infos["terminal_observation"]):
+                    if terminations[i] or truncations[i]:
+                        # Only apply penalty if it wasn't max steps
+                        # Check episode length from infos if available
+                        custom_rewards[i] = -1.0
+
+            # early_termination = dones & (steps_per_env < 499)
+            # custom_rewards = np.where(early_termination, -1.0, custom_rewards)
             
-            # Apply termination penalty if the episode ended early (not due to max steps)
-            if done and score < 499:
-                custom_reward = -1
+            # Store batch of experiences
+            agent.remember_batch(states, actions, custom_rewards, next_states, dones)
             
-            next_state = np.reshape(next_state, [1, state_size])
+            # Update states
+            states = next_states
             
-            # Store experience with custom reward
-            agent.remember(state, action, custom_reward, next_state, done)
+            # Update scores and track rewards
+            scores += 1  # Increment scores for each environment
+            episode_rewards.extend(custom_rewards.tolist())
+            steps_per_env += 1
+            total_steps += n_envs
             
-            # Move to next state
-            state = next_state
+            # Train periodically
+            if total_steps % (8 * n_envs) == 0:
+                loss = agent.replay()
+                episode_loss.append(loss)
             
-            # Track rewards
-            episode_rewards.append(custom_reward)
-            score += 1
-            
-            # Train on past experiences (replay) every X steps
-            if score % 8 == 0:
-                episode_loss.append(agent.replay())
-            
-            if done:
-                break
+        # Calculate episode metrics (use mean across environments)
+        avg_score = np.mean(scores)
         
         # Calculate episode time
         episode_time = time.time() - episode_start_time
@@ -222,14 +266,16 @@ def main():
             print("Target model updated")
         
         # Save scores
-        scores.append(score)
+        avg_scores.append(avg_score)
         
         # Calculate average score of last 25 episodes
-        avg_score = np.mean(scores[-25:])
-        avg_scores.append(avg_score)
+        running_avg_score = np.mean(avg_scores[-25:])
         
         # Calculate average reward per step for this episode
         avg_reward = np.mean(episode_rewards) if episode_rewards else 0 
+
+        # Calculate total reward for this episode
+        tot_reward = np.sum(episode_rewards) if episode_rewards else 0
 
         # Calculate average loss per step for this episode
         avg_loss = np.mean([l for l in episode_loss if l is not None]) if episode_loss else 0
@@ -240,19 +286,15 @@ def main():
         episode_minutes, episode_seconds = divmod(episode_time, 60)
         
         # Print progress with training time
-        print(f"Episode: {e}, Score: {score}, Avg: {avg_score:.2f}, " +
+        print(f"Episode: {e}, Score: {avg_score}, Avg Reward: {tot_reward}" +
                f"Learn Rate: {agent.get_current_learning_rate():.4f}, Epsilon: {agent.epsilon:.3f}, Avg Loss: {avg_loss:.4f}, " +
                f"Time: {int(total_hours)}h {int(total_minutes)}m {total_seconds:.2f}s")
         #f"Avg Reward: {avg_reward:.2f},
+        #Avg: {running_avg_score:.2f}, 
 			
-        # Write to TensorBoard
-        with summary_writer.as_default():
-            tf.summary.scalar('score', score, step=e)
-            tf.summary.scalar('avg_score_100', avg_score, step=e)
-            tf.summary.scalar('avg_reward', avg_reward, step=e)
-            tf.summary.scalar('epsilon', agent.epsilon, step=e)
-            tf.summary.scalar('avg_loss', avg_loss, step=e)
-            tf.summary.scalar('episode_time_seconds', episode_time, step=e)
+        if e % 10 == 0:
+            print_memory_usage()
+            print_gpu_memory()
 
         # #profiling stats
         # stats = pstats.Stats(pr)
