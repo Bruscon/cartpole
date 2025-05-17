@@ -111,10 +111,6 @@ def run_evaluation_episode(agent, episode_num):
         # Use model without exploration (epsilon=0)
         actions_tensor = agent.act_batch(tf.convert_to_tensor(eval_state, dtype=tf.float32), eval_mode=True)
         action = actions_tensor.numpy()
-
-        # If the returned values are -1, replace with random actions
-        if (action < 0):
-            action = np.random.randint(0, agent.action_size)
         
         # Take action
         next_state, reward, terminated, truncated, _ = eval_env.step(action[0])
@@ -161,16 +157,15 @@ def main():
     
     # Create environment, vectorized
     n_envs = 16  
-    env_fns = [lambda: gym.make('CartPole-v1') for _ in range(n_envs)]
-    envs = gym.vector.AsyncVectorEnv(env_fns)
-    states, _ = envs.reset()
+    envs = gym.make_vec("CartPole-v1", num_envs=n_envs, vectorization_mode="async")
+    states, _ = envs.reset(seed=1)
     
     # Create agent
     agent = DQNAgent(state_size, action_size, log_dir, INITIAL_MODEL_PATH)
     
     EPISODES = 100000
     
-    # Keep track of rewards per episode
+    # Keep track of average rewards per episode
     avg_score = 0       # average from all environments on this one episode
     avg_scores = []     # running list from each episode
     running_avg_score=0 # average of last 25 episode averages
@@ -193,24 +188,20 @@ def main():
         episode_loss = []     # Track all losses for episode statistics
         episode_start_time = time.time()  # Track episode start time
 
-        # Track steps per environment
-        steps_per_env = np.zeros(n_envs, dtype=int)
+        # # Track steps per environment
+        # steps_per_env = np.zeros(n_envs, dtype=int)
         total_steps = 0
-        max_steps = 500  # Maximum steps per episode
+        # max_steps = 500  # Maximum steps per episode
         
-        # An episode is now basically just 500 timesteps in each env that resets when the bar falls
-        target_steps_per_episode = max_steps*n_envs
+        # # An episode is now basically just 500 timesteps in each env that resets when the bar falls
+        # target_steps_per_episode = max_steps*n_envs
 
-        while total_steps < target_steps_per_episode:
+        while True:
 
             # Get actions for all environments
             actions_tensor = agent.act_batch(tf.convert_to_tensor(states, dtype=tf.float32), eval_mode=False)
             actions = actions_tensor.numpy()
 
-            # If the returned values are -1, replace with random actions
-            if np.any(actions < 0):
-                actions = np.random.randint(0, agent.action_size, size=states.shape[0])
-            
             # Take actions in all environments
             next_states, rewards, terminations, truncations, infos = envs.step(actions)
             dones = np.logical_or(terminations, truncations)
@@ -232,9 +223,6 @@ def main():
                         # Only apply penalty if it wasn't max steps
                         # Check episode length from infos if available
                         custom_rewards[i] = -1.0
-
-            # early_termination = dones & (steps_per_env < 499)
-            # custom_rewards = np.where(early_termination, -1.0, custom_rewards)
             
             # Store batch of experiences
             agent.remember_batch(states, actions, custom_rewards, next_states, dones)
@@ -245,11 +233,10 @@ def main():
             # Update scores and track rewards
             scores += 1  # Increment scores for each environment
             episode_rewards.extend(custom_rewards.tolist())
-            steps_per_env += 1
-            total_steps += n_envs
+            total_steps += 1
             
             # Train periodically
-            if total_steps % (8 * n_envs) == 0:
+            if total_steps % 8 == 0:
                 loss = agent.replay()
                 episode_loss.append(loss)
             
@@ -286,7 +273,7 @@ def main():
         episode_minutes, episode_seconds = divmod(episode_time, 60)
         
         # Print progress with training time
-        print(f"Episode: {e}, Score: {avg_score}, Avg Reward: {tot_reward}" +
+        print(f"Episode: {e}, Score: {avg_score}, Avg Reward: {tot_reward:.0f}" +
                f"Learn Rate: {agent.get_current_learning_rate():.4f}, Epsilon: {agent.epsilon:.3f}, Avg Loss: {avg_loss:.4f}, " +
                f"Time: {int(total_hours)}h {int(total_minutes)}m {total_seconds:.2f}s")
         #f"Avg Reward: {avg_reward:.2f},

@@ -113,13 +113,33 @@ class DQNAgent:
     @tf.function
     def act_batch(self, states_batch, eval_mode=False):
         """Batch version of act() for vectorized environments"""
-        if not eval_mode and tf.random.uniform(()) <= self.epsilon:
-            # For random actions, return dummy tensor - we'll handle random generation outside
-            return tf.zeros([tf.shape(states_batch)[0]], dtype=tf.int64) - 1
+        batch_size = tf.shape(states_batch)[0]
         
         # Get Q-values for all actions in batch of states
         q_values = self.model(states_batch)
-        return tf.argmax(q_values, axis=1)  # Return tensor, not numpy array
+        greedy_actions = tf.argmax(q_values, axis=1)
+        
+        if eval_mode:
+            return greedy_actions
+        
+        # Generate random values for epsilon comparison (one per state)
+        random_values = tf.random.uniform([batch_size], dtype=tf.float32)
+        
+        # Generate random actions for the entire batch (we'll only use some of these)
+        random_actions = tf.random.uniform(
+            [batch_size], 
+            minval=0, 
+            maxval=self.action_size, 
+            dtype=tf.int64
+        )
+        
+        # Create a mask for which states should explore
+        should_explore = random_values <= self.epsilon
+        
+        # Select either random or greedy actions based on the mask
+        final_actions = tf.where(should_explore, random_actions, greedy_actions)
+        
+        return final_actions
 
     @tf.function
     def predict_batch(self, states):
