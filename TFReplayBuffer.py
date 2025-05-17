@@ -24,18 +24,39 @@ class TFReplayBuffer:
         self.current_idx = 0
     
     def add(self, states_batch, actions_batch, rewards_batch, next_states_batch, dones_batch):
-        # Add batch of experiences (vectorized add for parallel environments)
-        batch_size = states_batch.shape[0]
+        # Get the range of indices to update
+        batch_size = tf.shape(states_batch)[0]
+        end_idx = self.current_idx + batch_size
         
-        # Handle wrapping around buffer end
-        indices = tf.range(self.current_idx, self.current_idx + batch_size) % self.buffer_size
-        
-        # Use scatter updates to efficiently update buffer
-        self.states.scatter_update(tf.IndexedSlices(states_batch, indices))
-        self.actions.scatter_update(tf.IndexedSlices(actions_batch, indices))
-        self.rewards.scatter_update(tf.IndexedSlices(rewards_batch, indices))
-        self.next_states.scatter_update(tf.IndexedSlices(next_states_batch, indices))
-        self.dones.scatter_update(tf.IndexedSlices(dones_batch, indices))
+        # Handle the case where the batch wraps around the buffer
+        if end_idx <= self.buffer_size:
+            # Simple case: batch fits without wrapping
+            idx_slice = slice(self.current_idx, end_idx)
+            self.states[idx_slice].assign(states_batch)
+            self.actions[idx_slice].assign(actions_batch)
+            self.rewards[idx_slice].assign(rewards_batch)
+            self.next_states[idx_slice].assign(next_states_batch)
+            self.dones[idx_slice].assign(dones_batch)
+        else:
+            # Complex case: batch wraps around
+            first_size = self.buffer_size - self.current_idx
+            second_size = batch_size - first_size
+            
+            # First part (up to buffer end)
+            first_slice = slice(self.current_idx, self.buffer_size)
+            self.states[first_slice].assign(states_batch[:first_size])
+            self.actions[first_slice].assign(actions_batch[:first_size])
+            self.rewards[first_slice].assign(rewards_batch[:first_size])
+            self.next_states[first_slice].assign(next_states_batch[:first_size])
+            self.dones[first_slice].assign(dones_batch[:first_size])
+            
+            # Second part (wrapping to buffer start)
+            second_slice = slice(0, second_size)
+            self.states[second_slice].assign(states_batch[first_size:])
+            self.actions[second_slice].assign(actions_batch[first_size:])
+            self.rewards[second_slice].assign(rewards_batch[first_size:])
+            self.next_states[second_slice].assign(next_states_batch[first_size:])
+            self.dones[second_slice].assign(dones_batch[first_size:])
         
         # Update tracking variables
         self.current_idx = (self.current_idx + batch_size) % self.buffer_size
