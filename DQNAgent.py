@@ -24,12 +24,13 @@ class DQNAgent:
         self.gamma = 0.99                   # Discount factor
         self.epsilon = 1.0                  # Exploration rate
         self.epsilon_min = 0.05             # Minimum exploration probability
-        self.epsilon_decay = 0.99           # Exponential decay rate for exploration
+        self.epsilon_decay = 0.995          # Exponential decay rate for exploration
         self.batch_size = 2048              # Size of batches for training
         self.train_start = self.batch_size  # Minimum experiences before training
-        self.update_target_frequency = 1000 # How often to update target network (steps)
-        self.learning_rate = .06            # Initial learning rate
-        self.learning_rate_decay = .998     # learning rate decay 
+        self.train_frequency = 2            # How many time steps between training runs
+        self.update_target_frequency = 100  # How often to update target network (steps)
+        self.learning_rate = .05            # Initial learning rate
+        self.learning_rate_decay = .999     # learning rate decay 
         self.epochs = 10
 
         # create memory object
@@ -117,35 +118,59 @@ class DQNAgent:
         return np.argmax(q_values[0])
 
     @tf.function
-    def act_batch(self, states_batch, eval_mode=False):
-        """Batch version of act() for vectorized environments, fully in TensorFlow"""
-        batch_size = tf.shape(states_batch)[0]
+    def get_greedy_actions(self, states_batch):
+        """Only computes the greedy actions using the model - no randomness here"""
+        q_values = self.model(states_batch, training=False)
+        return tf.argmax(q_values, axis=1, output_type=tf.int32)
+
+    # This function handles all randomness outside the graph. For some reason the decorator breaks it. Something about randomness in tf graphs being weird
+    def explore_batch(self, actions):
+        """Handles epsilon-greedy exploration using pure TensorFlow operations"""
+        batch_size = tf.shape(actions)[0]
         
-        # Get Q-values for all actions in batch of states
-        q_values = self.model(states_batch)
-        greedy_actions = tf.argmax(q_values, axis=1)
-        
-        if eval_mode:
-            return greedy_actions
-        
-        # Generate random values for epsilon comparison (one per state)
-        random_values = tf.random.uniform([batch_size], dtype=tf.float32)
+        # Generate exploration mask using TensorFlow random ops
+        explore_mask = tf.random.uniform(shape=[batch_size], minval=0, maxval=1) < self.epsilon
         
         # Generate random actions for the entire batch
         random_actions = tf.random.uniform(
-            [batch_size], 
+            shape=[batch_size], 
             minval=0, 
             maxval=self.action_size, 
-            dtype=tf.int64
+            dtype=tf.int32
         )
         
-        # Create a mask for which states should explore
-        should_explore = random_values <= self.epsilon
-        
-        # Select either random or greedy actions based on the mask
-        final_actions = tf.where(should_explore, random_actions, greedy_actions)
+        # Use tf.where to select either the original action or random action based on explore_mask
+        final_actions = tf.where(
+            condition=explore_mask,
+            x=random_actions,
+            y=actions
+        )
         
         return final_actions
+
+
+    # def act_batch(self, states_batch, eval_mode=False):
+    #     """Batch version of act() for vectorized environments 
+    #     Returns -1 for positions that should be random actions"""
+    #     # No decorator - we'll keep this in eager mode
+        
+    #     # Get q-values from the model
+    #     q_values = self.model(states_batch, training=False)
+    #     greedy_actions = tf.argmax(q_values, axis=1, output_type=tf.int32).numpy()
+        
+    #     # Fast path for evaluation mode
+    #     if eval_mode:
+    #         return greedy_actions
+        
+    #     # Create exploration mask
+    #     batch_size = len(greedy_actions)
+    #     random_mask = np.random.random(batch_size) < self.epsilon
+        
+    #     # Set -1 for positions that should be random
+    #     final_actions = greedy_actions.copy()
+    #     final_actions[random_mask] = -1
+        
+    #     return final_actions
 
     @tf.function
     def predict_batch(self, states):

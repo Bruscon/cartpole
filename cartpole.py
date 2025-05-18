@@ -148,7 +148,7 @@ def run_evaluation_episode(agent, eval_env, step_num):
         total_reward += reward
         steps += 1
     
-    print(f"Evaluation at step {step_num}: Score: {steps}, Reward: {total_reward}")
+    print(f"----EVALUATION EPISODE at step {step_num}: Score: {steps}, Reward: {total_reward}")
     return steps, total_reward
 
 # Custom reward calculation function
@@ -166,7 +166,6 @@ def calculate_custom_rewards(cart_positions, pole_angles, terminations, truncati
     custom_rewards = tf.where(dones, tf.constant(-1.0, dtype=tf.float32), custom_rewards)
     
     return custom_rewards, dones
-
 
 
 def main():
@@ -188,9 +187,9 @@ def main():
     
     # Training hyperparameters
     TOTAL_TIMESTEPS = 10_000_000  # Total training steps
-    EVAL_FREQUENCY = 1_000        # How often to run evaluation episodes
+    EVAL_FREQUENCY = 100          # How often to run evaluation episodes
     SAVE_FREQUENCY = 5_000        # How often to save the model
-    LOG_FREQUENCY = 100           # How often to print logs
+    LOG_FREQUENCY = 25            # How often to print logs
     
     # Track metrics using TensorFlow variables where appropriate
     total_steps = 0
@@ -200,8 +199,11 @@ def main():
     
     # Global statistics
     completed_episodes = 0
-    recent_episode_rewards = deque(maxlen=100)    # Store recent episode rewards for averaging
-    recent_episode_lengths = deque(maxlen=100)    # Store recent episode lengths for averaging
+    
+    # Track metrics between logging periods instead of using deque with fixed size
+    log_period_episode_rewards = []
+    log_period_episode_lengths = []
+    log_period_losses = []
     
     # Track training time
     training_start_time = time.time()
@@ -211,9 +213,12 @@ def main():
     states, _ = envs.reset()
 
     while total_steps < TOTAL_TIMESTEPS:
-        # Get actions for all environments
-        actions = agent.act_batch(states, eval_mode=False)
-        
+        # Get actions from forward pass on NN
+        greedy_actions = agent.get_greedy_actions(states)
+
+        # Insert randomness for exploration (replaces values with a random action according to epsilon)
+        actions = agent.explore_batch(greedy_actions)
+
         # Take actions in all environments
         next_states, rewards, terminations, truncations, infos = envs.step(actions)
         
@@ -236,17 +241,17 @@ def main():
         # Update metrics for each environment
         env_steps += 1  # Increment steps for all environments
         env_rewards += custom_rewards.numpy()  # Add rewards to running totals
-        total_steps += n_envs
-        
+        total_steps += 1
+
         # Handle episode terminations for each environment
         done_indices = np.where(dones.numpy())[0]
         for i in done_indices:
             completed_episodes += 1
             episode_counts[i] += 1
             
-            # Store episode stats for averaging
-            recent_episode_rewards.append(env_rewards[i])
-            recent_episode_lengths.append(env_steps[i])
+            # Store episode stats for this logging period
+            log_period_episode_rewards.append(env_rewards[i])
+            log_period_episode_lengths.append(env_steps[i])
             
             # Reset counters for this environment
             env_steps[i] = 0
@@ -255,12 +260,14 @@ def main():
         # Update states for next iteration
         states = next_states
         
-        # Train periodically (every 8 steps)
-        if total_steps % 8 == 0:
+        # Train periodically 
+        if total_steps % (agent.train_frequency) == 0:
             loss = agent.replay()
+            # Store loss for logging
+            log_period_losses.append(loss)
         
         # Update target model periodically
-        if total_steps % (agent.update_target_frequency * 100) == 0:
+        if total_steps % (agent.update_target_frequency) == 0:
             agent.update_target_model()
             print("Target model updated")
         
@@ -270,9 +277,10 @@ def main():
             elapsed_time = current_time - last_log_time
             total_elapsed = current_time - training_start_time
             
-            # Calculate statistics
-            avg_reward = np.mean(recent_episode_rewards) if recent_episode_rewards else 0
-            avg_length = np.mean(recent_episode_lengths) if recent_episode_lengths else 0
+            # Calculate statistics from data since last log
+            avg_reward = np.mean(log_period_episode_rewards) if log_period_episode_rewards else 0
+            avg_length = np.mean(log_period_episode_lengths) if log_period_episode_lengths else 0
+            avg_loss = np.mean(log_period_losses) if log_period_losses else 0
             steps_per_second = LOG_FREQUENCY / elapsed_time if elapsed_time > 0 else 0
             
             # Format times for display
@@ -281,9 +289,15 @@ def main():
             
             print(f"Steps: {total_steps}, Episodes: {completed_episodes}, " +
                   f"Avg Reward: {avg_reward:.2f}, Avg Length: {avg_length:.1f}, " +
-                  f"SPS: {steps_per_second:.1f}, LR: {agent.get_current_learning_rate():.4f}, " +
-                  f"Epsilon: {agent.epsilon:.3f}, " +
-                  f"Time: {int(total_hours)}h {int(total_minutes)}m {total_seconds:.2f}s")
+                  f"Avg Loss: {avg_loss:.4f}, SPS: {steps_per_second:.1f}, " +
+                  f"LR: {agent.get_current_learning_rate():.4f}, " +
+                  f"ε: {agent.epsilon:.3f}, " +
+                  f"Time: {int(total_hours)}h {int(total_minutes)}m {int(total_seconds)}s")
+            
+            # Reset the log period tracking lists after logging
+            log_period_episode_rewards = []
+            log_period_episode_lengths = []
+            log_period_losses = []
             
             last_log_time = current_time
             
