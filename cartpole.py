@@ -18,6 +18,7 @@ import cProfile
 import pstats
 
 from DQNAgent import DQNAgent
+from TrainingLogger import TrainingLogger
 
 verbose = 1
 
@@ -124,32 +125,42 @@ def print_gpu_memory():
             except:
                 print("GPU memory usage unavailable")
 
-def run_evaluation_episode(agent, eval_env, step_num):
-    """Run a single episode with the current policy for evaluation"""
-    state, _ = eval_env.reset()
-    state = np.reshape(state, [1, agent.state_size])
+# Create a single evaluation environment to reuse
+if args.graphics:
+    eval_env = gym.make('CartPole-v1', render_mode='human')
+else:
+    eval_env = gym.make('CartPole-v1')
+
+def run_evaluation_episode(agent):
+    """Run a single evaluation episode with reused environment and no training"""
     done = False
-    total_reward = 0
-    steps = 0
-    
-    while not done and steps < 500:
-        # Use the policy without exploration
-        action = agent.act(state, eval_mode=True)
+    score = 0
+    rewards = []
+
+    # Reuse the existing evaluation environment
+    eval_state, _ = eval_env.reset()
+    eval_state = np.reshape(eval_state, [1, agent.state_size])
+    eval_state_tensor = tf.convert_to_tensor(eval_state, dtype=tf.float32)
+
+    while not done:
+        # Use model without exploration for evaluation
+        action = agent.get_greedy_actions(eval_state_tensor).numpy()[0]
         
         # Take action
-        next_state, reward, termination, truncation, _ = eval_env.step(action)
-        done = termination or truncation
-        
-        # Reshape and save next state
-        next_state = np.reshape(next_state, [1, agent.state_size])
-        
-        # Update state and count
-        state = next_state
-        total_reward += reward
-        steps += 1
-    
-    print(f"----EVALUATION EPISODE at step {step_num}: Score: {steps}, Reward: {total_reward}")
-    return steps, total_reward
+        next_state, reward, terminated, truncated, _ = eval_env.step(action)
+        done = terminated or truncated
+
+        custom_reward, dones = calculate_custom_rewards(next_state[0], next_state[2], terminated, truncated)
+
+        rewards.append(custom_reward)
+        eval_state = np.reshape(next_state, [1, agent.state_size])
+        eval_state_tensor = tf.convert_to_tensor(eval_state, dtype=tf.float32)
+        score += 1
+
+    avg_reward = np.mean(rewards) if rewards else 0
+    print(f"\n--- EVALUATION Score: {score}, Avg Reward: {avg_reward:.4f}")
+
+    return score, avg_reward
 
 # Custom reward calculation function
 @tf.function
@@ -159,11 +170,11 @@ def calculate_custom_rewards(cart_positions, pole_angles, terminations, truncati
     position_rewards = tf.maximum(0.0, 1.0 - (tf.abs(cart_positions) / MAX_POSITION))
     
     # Base rewards
-    custom_rewards = 0.7 * angle_rewards + 0.3 * position_rewards
+    custom_rewards = 0.5 * angle_rewards + 0.5 * position_rewards
     
     # Apply termination penalty
     dones = tf.logical_or(terminations, truncations)
-    custom_rewards = tf.where(dones, tf.constant(-1.0, dtype=tf.float32), custom_rewards)
+    # custom_rewards = tf.where(dones, tf.constant(-1.0, dtype=tf.float32), custom_rewards)
     
     return custom_rewards, dones
 
@@ -184,13 +195,20 @@ def main():
 
     # Create agent
     agent = DQNAgent(state_size, action_size, log_dir, INITIAL_MODEL_PATH)
+
+    #Logging object for generating charts
+    logger = TrainingLogger(log_dir, window_size=25)
     
     # Training hyperparameters
     TOTAL_TIMESTEPS = 10_000_000  # Total training steps
-    EVAL_FREQUENCY = 100          # How often to run evaluation episodes
+    EVAL_FREQUENCY = 300          # How often to run evaluation episodes
     SAVE_FREQUENCY = 5_000        # How often to save the model
     LOG_FREQUENCY = 25            # How often to print logs
-    
+
+    # for log formatting
+    LOG_FORMAT_HEADER = "{:>10} {:>10} {:>12} {:>12} {:>12} {:>8} {:>8} {:>8} {:>10}"
+    LOG_FORMAT_DATA = "{:>10,d} {:>10,d} {:>12.2f} {:>12.1f} {:>12.4f} {:>8.1f} {:>8.4f} {:>8.3f} {:>10}"
+       
     # Track metrics using TensorFlow variables where appropriate
     total_steps = 0
     episode_counts = np.zeros(n_envs, dtype=np.int32)    # Track episodes completed per env
@@ -201,10 +219,10 @@ def main():
     completed_episodes = 0
     
     # Track metrics between logging periods instead of using deque with fixed size
-    log_period_episode_rewards = []
-    log_period_episode_lengths = []
-    log_period_losses = []
-    
+    all_episode_rewards = []
+    all_episode_lengths = []
+    all_losses = []
+
     # Track training time
     training_start_time = time.time()
     last_log_time = training_start_time
@@ -221,19 +239,8 @@ def main():
 
         # Take actions in all environments
         next_states, rewards, terminations, truncations, infos = envs.step(actions)
-        
-        # Calculate dones
-        dones = tf.logical_or(terminations, truncations)
-        
-        # Calculate custom rewards using TensorFlow operations
-        cart_positions = next_states[:, 0]
-        pole_angles = next_states[:, 2]
-        
-        angle_rewards = 1.0 - (tf.abs(pole_angles) / MAX_ANGLE)
-        position_rewards = tf.maximum(0.0, 1.0 - (tf.abs(cart_positions) / MAX_POSITION))
-        
-        custom_rewards = 0.7 * angle_rewards + 0.3 * position_rewards
-        custom_rewards = tf.where(dones, tf.constant(-1.0, dtype=tf.float32), custom_rewards)
+
+        custom_rewards, dones = calculate_custom_rewards(next_states[:,0], next_states[:,2], terminations, truncations)
         
         # Store batch of experiences in replay buffer
         agent.remember_batch(states, actions, custom_rewards, next_states, dones)
@@ -243,16 +250,26 @@ def main():
         env_rewards += custom_rewards.numpy()  # Add rewards to running totals
         total_steps += 1
 
+        # Maybe don't need to log these every step, its a lot of data. 
+        logger.log_metrics(
+            step=total_steps,
+            lr=agent.get_current_learning_rate(),
+            epsilon=agent.epsilon
+        )
+
         # Handle episode terminations for each environment
         done_indices = np.where(dones.numpy())[0]
         for i in done_indices:
             completed_episodes += 1
             episode_counts[i] += 1
             
-            # Store episode stats for this logging period
-            log_period_episode_rewards.append(env_rewards[i])
-            log_period_episode_lengths.append(env_steps[i])
-            
+            # Log episode metrics
+            logger.log_metrics(
+                step=total_steps,
+                reward=env_rewards[i],
+                length=env_steps[i]
+            )
+                
             # Reset counters for this environment
             env_steps[i] = 0
             env_rewards[i] = 0
@@ -263,63 +280,42 @@ def main():
         # Train periodically 
         if total_steps % (agent.train_frequency) == 0:
             loss = agent.replay()
-            # Store loss for logging
-            log_period_losses.append(loss)
+            logger.log_metrics(step=total_steps, loss=loss)
         
         # Update target model periodically
         if total_steps % (agent.update_target_frequency) == 0:
             agent.update_target_model()
             print("Target model updated")
         
-        # Log progress periodically
-        if total_steps % LOG_FREQUENCY == 0:
-            current_time = time.time()
-            elapsed_time = current_time - last_log_time
-            total_elapsed = current_time - training_start_time
-            
-            # Calculate statistics from data since last log
-            avg_reward = np.mean(log_period_episode_rewards) if log_period_episode_rewards else 0
-            avg_length = np.mean(log_period_episode_lengths) if log_period_episode_lengths else 0
-            avg_loss = np.mean(log_period_losses) if log_period_losses else 0
-            steps_per_second = LOG_FREQUENCY / elapsed_time if elapsed_time > 0 else 0
-            
-            # Format times for display
-            total_hours, remainder = divmod(total_elapsed, 3600)
-            total_minutes, total_seconds = divmod(remainder, 60)
-            
-            print(f"Steps: {total_steps}, Episodes: {completed_episodes}, " +
-                  f"Avg Reward: {avg_reward:.2f}, Avg Length: {avg_length:.1f}, " +
-                  f"Avg Loss: {avg_loss:.4f}, SPS: {steps_per_second:.1f}, " +
-                  f"LR: {agent.get_current_learning_rate():.4f}, " +
-                  f"ε: {agent.epsilon:.3f}, " +
-                  f"Time: {int(total_hours)}h {int(total_minutes)}m {int(total_seconds)}s")
-            
-            # Reset the log period tracking lists after logging
-            log_period_episode_rewards = []
-            log_period_episode_lengths = []
-            log_period_losses = []
-            
-            last_log_time = current_time
-            
-            # Occasionally print memory usage
-            if total_steps % (LOG_FREQUENCY * 10) == 0:
-                print_memory_usage()
-                print_gpu_memory()
+        
+        # Occasionally print memory usage
+        if total_steps % (LOG_FREQUENCY * 50) == 0:
+            print_memory_usage()
+            print_gpu_memory()
         
         # Run evaluation periodically
         if total_steps % EVAL_FREQUENCY == 0:
-            # Create a separate evaluation environment
-            eval_env = gym.make('CartPole-v1')
-            eval_score, eval_reward = run_evaluation_episode(agent, eval_env, total_steps)
-            eval_env.close()
+            eval_score, eval_reward = run_evaluation_episode(agent)
+
+            logger.log_metrics(step=total_steps, eval_length=eval_score)
             
         # Save model periodically
         if total_steps % SAVE_FREQUENCY == 0:
             agent.save_model(total_steps)
+
+        # Update plot periodically based on time rather than steps
+        logger.maybe_update_plot(
+            force=(total_steps % (LOG_FREQUENCY * 5) == 0),
+            save=(total_steps % SAVE_FREQUENCY == 0)
+        )
     
     # Save final model
     agent.model.save(os.path.join(log_dir, 'trained_cartpole_model_final.keras'))
     print(f"Final model saved to: {os.path.join(log_dir, 'trained_cartpole_model_final.keras')}")
+
+    # Final plot update and save
+    logger.update_plot(save=True)
+    logger.save_data()
 
     # Close environment
     tf_envs.close()

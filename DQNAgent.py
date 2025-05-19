@@ -24,13 +24,13 @@ class DQNAgent:
         self.gamma = 0.99                   # Discount factor
         self.epsilon = 1.0                  # Exploration rate
         self.epsilon_min = 0.05             # Minimum exploration probability
-        self.epsilon_decay = 0.995          # Exponential decay rate for exploration
-        self.batch_size = 2048              # Size of batches for training
-        self.train_start = self.batch_size  # Minimum experiences before training
-        self.train_frequency = 2            # How many time steps between training runs
-        self.update_target_frequency = 100  # How often to update target network (steps)
-        self.learning_rate = .05            # Initial learning rate
-        self.learning_rate_decay = .999     # learning rate decay 
+        self.epsilon_decay = 0.99           # Exponential decay rate for exploration
+        self.batch_size = 4096              # Size of batches for training
+        self.train_start = 2* self.batch_size  # Minimum experiences before training
+        self.train_frequency = 25           # How many time steps between training runs
+        self.update_target_frequency = 600  # How often to update target network (steps)
+        self.learning_rate = .08             # Initial learning rate
+        self.learning_rate_decay = 1       # learning rate decay 
         self.epochs = 10
 
         # create memory object
@@ -39,7 +39,7 @@ class DQNAgent:
         # learning rate scheduler for adam optimizer
         self.lr_schedule = keras.optimizers.schedules.ExponentialDecay(
             initial_learning_rate=self.learning_rate,
-            decay_steps=1,
+            decay_steps=10,
             decay_rate=self.learning_rate_decay)
         self.optimizer_steps = 0
 
@@ -107,16 +107,6 @@ class DQNAgent:
         processed = self._process_batch(states, actions, rewards, next_states, dones)
         self.memory.add(*processed)
     
-    # Keep the NumPy version for compatibility with single environment
-    def act(self, state, eval_mode=False):
-        """Epsilon-greedy action selection, with option for pure exploitation"""
-        if not eval_mode and np.random.rand() <= self.epsilon:
-            return random.randrange(self.action_size)
-        
-        # Get Q-values for all actions in current state
-        q_values = self.model.predict(state, verbose=0)
-        return np.argmax(q_values[0])
-
     @tf.function
     def get_greedy_actions(self, states_batch):
         """Only computes the greedy actions using the model - no randomness here"""
@@ -148,36 +138,12 @@ class DQNAgent:
         
         return final_actions
 
-
-    # def act_batch(self, states_batch, eval_mode=False):
-    #     """Batch version of act() for vectorized environments 
-    #     Returns -1 for positions that should be random actions"""
-    #     # No decorator - we'll keep this in eager mode
-        
-    #     # Get q-values from the model
-    #     q_values = self.model(states_batch, training=False)
-    #     greedy_actions = tf.argmax(q_values, axis=1, output_type=tf.int32).numpy()
-        
-    #     # Fast path for evaluation mode
-    #     if eval_mode:
-    #         return greedy_actions
-        
-    #     # Create exploration mask
-    #     batch_size = len(greedy_actions)
-    #     random_mask = np.random.random(batch_size) < self.epsilon
-        
-    #     # Set -1 for positions that should be random
-    #     final_actions = greedy_actions.copy()
-    #     final_actions[random_mask] = -1
-        
-    #     return final_actions
-
     @tf.function
     def predict_batch(self, states):
         """Direct model prediction without .predict() to avoid unnecessary overhead"""
         return self.model(states)
     
-    @tf.function(experimental_relax_shapes=True)
+    @tf.function(reduce_retracing=True)
     def _compute_targets(self, states, actions, rewards, next_states, dones):
         """Compute Q-value targets using TensorFlow operations"""
         # Define the compute dtype based on global policy
