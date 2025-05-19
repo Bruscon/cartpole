@@ -26,10 +26,6 @@ from TrainingLogger import TrainingLogger
 
 verbose = 1
 
-# Enable profiling
-pr = cProfile.Profile()
-pr.enable()
-
 # Suppress TensorFlow warnings
 #tf.compat.v1.logging.set_verbosity(tf.compat.v1.logging.ERROR)
 
@@ -137,11 +133,11 @@ def calculate_custom_rewards(cart_positions, pole_angles, terminations, truncati
     position_rewards = tf.maximum(0.0, 1.0 - (tf.abs(cart_positions) / MAX_POSITION))
     
     # Base rewards
-    custom_rewards = 0.5 * angle_rewards + 0.5 * position_rewards
+    custom_rewards = 0.7 * angle_rewards + 0.3 * position_rewards
     
     # Apply termination penalty
     dones = tf.logical_or(terminations, truncations)
-    # custom_rewards = tf.where(dones, tf.constant(-1.0, dtype=tf.float32), custom_rewards)
+    custom_rewards = tf.where(dones, tf.constant(-1.0, dtype=tf.float32), custom_rewards)
     
     return custom_rewards, dones
 
@@ -167,7 +163,7 @@ def main():
     
     # Training hyperparameters
     TOTAL_TIMESTEPS = 10_000_000  # Total training steps
-    EVAL_FREQUENCY = 100          # How often to run evaluation episodes
+    EVAL_FREQUENCY = 50          # How often to run evaluation episodes
     SAVE_FREQUENCY = 5_000        # How often to save the model
     LOG_FREQUENCY = 25            # How often to print logs
        
@@ -222,7 +218,10 @@ def main():
     child_conn.close()
 
     # Main training loop - run for a fixed number of steps
-    states, _ = envs.reset()
+    states, _ = envs.reset(seed=42)
+
+    pr = cProfile.Profile()
+    pr.enable()
 
     try:
         while total_steps < TOTAL_TIMESTEPS:
@@ -230,7 +229,7 @@ def main():
             greedy_actions = agent.get_greedy_actions(states)
 
             # Insert randomness for exploration
-            actions = agent.explore_batch(greedy_actions)
+            actions = agent.explore_batch(greedy_actions, seed=total_steps)
 
             # Take actions in all environments
             next_states, rewards, terminations, truncations, infos = envs.step(actions)
@@ -317,8 +316,8 @@ def main():
                         eval_step, eval_score, eval_reward = eval_result
                         
                         # Log evaluation results
-                        logger.log_metrics(step=eval_step, eval_length=eval_score)
-                        print(f"--- EVALUATION at step {eval_step}: Score: {eval_score}, Avg Reward: {eval_reward:.4f}")
+                        logger.log_metrics(step=eval_step, eval_reward=eval_reward*eval_score)
+                        print(f"--- EVALUATION at step {eval_step}: Score: {eval_score}, Reward: {eval_reward*eval_score:.4f}")
                     
                     # Mark evaluation as completed
                     evaluation_pending = False
@@ -335,6 +334,35 @@ def main():
                 force=(total_steps % (LOG_FREQUENCY * 5) == 0),
                 save=(total_steps % SAVE_FREQUENCY == 0)
             )
+
+            if total_steps == 100: 
+                pr.disable()
+                profile_path = os.path.join(log_dir, 'main_loop_profile.prof')
+                pr.dump_stats(profile_path)
+
+                # Create a stats object
+                stats = pstats.Stats(profile_path)
+
+                # Print overall summary
+                print("\n=== TOP TIME-CONSUMING FUNCTIONS (by cumtime) ===")
+                stats.sort_stats('cumtime').print_stats(15)  # Top functions by cumulative time
+
+                print("\n=== TOP TIME-CONSUMING FUNCTIONS (by tottime) ===")
+                stats.sort_stats('tottime').print_stats(15)  # Top functions by total time spent in the function itself
+
+                # Filter to just see your code
+                print("\n=== YOUR CODE ONLY ===")
+                my_code_path = os.path.dirname(os.path.abspath(__file__))
+                stats.sort_stats('cumtime').print_stats(my_code_path, 15)
+
+                # For specific interesting functions in your code, find what they're calling
+                print("\n=== KEY FUNCTION ANALYSIS ===")
+                for func_name in ['agent.replay', 'agent.remember_batch', 'calculate_custom_rewards']:
+                    matching_funcs = [f for f in stats.stats if func_name in str(f[2])]
+                    for func in matching_funcs:
+                        print(f"\nCallees of {func[2]}:")
+                        stats.sort_stats('cumtime').print_callees(func[2], 10)
+
         
         # Save final model
         final_model_path = os.path.join(log_dir, 'trained_cartpole_model_final.keras')

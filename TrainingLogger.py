@@ -2,14 +2,12 @@ import matplotlib.pyplot as plt
 import matplotlib
 matplotlib.use('TkAgg')  # Use TkAgg backend for Ubuntu
 from matplotlib.gridspec import GridSpec
+from matplotlib.collections import PathCollection
 import numpy as np
 import os
 import pandas as pd
 import time
 from collections import deque
-
-# Use TkAgg backend which works well on Ubuntu
-matplotlib.use('TkAgg')
 
 class TrainingLogger:
     def __init__(self, log_dir, window_size=25):
@@ -20,12 +18,12 @@ class TrainingLogger:
         self.data = pd.DataFrame(columns=[
             'episode_reward', 
             'episode_length',
-            'eval_length',
+            'eval_reward',
             'loss', 
             'learning_rate', 
             'epsilon',
-            'avg_reward',  # Track rolling average as a continuous series
-            'avg_length'   # Track rolling average as a continuous series
+            'avg_reward',  
+            'avg_length'   
         ])
         
         # Create rolling windows for episode metrics
@@ -36,11 +34,24 @@ class TrainingLogger:
         self.last_update_time = time.time()
         self.update_interval = 1.0  # Update plot every 1 second
         
+        # Tracking for efficiency
+        self.is_first_plot = True
+        self.last_plotted_indices = {
+            'episode_reward': -1,
+            'episode_length': -1,
+            'eval_reward': -1,
+            'avg_reward': -1,
+            'avg_length': -1,
+            'loss': -1,
+            'learning_rate': -1,
+            'epsilon': -1
+        }
+        
         # Create plot figure and axes
         self.setup_plot()
         
     def setup_plot(self):
-        """Setup matplotlib figure and axes"""
+        """Setup matplotlib figure and axes with all plot objects initialized once"""
         plt.ion()  # Turn on interactive mode
         self.fig, self.axes = plt.subplots(2, 1, figsize=(10, 10), sharex=True)
         
@@ -55,18 +66,49 @@ class TrainingLogger:
         self.training_ax.set_title('Training Metrics')
         self.training_ax.set_xlabel('Step')
         self.training_ax.set_ylabel('Loss / Epsilon')
-        self.training_ax.set_ylim(0, 1)  # For loss and epsilon (0-1)
+        self.training_ax.set_ylim(0, 5)  # For loss and epsilon (0-1)
         
         # Create a second y-axis for learning rate
         self.lr_ax = self.training_ax.twinx()
         self.lr_ax.set_ylabel('Learning Rate')
         self.lr_ax.set_ylim(0, 0.1)  # For learning rate (0-0.1)
         
+        # Initialize all plot objects ONCE (empty at first)
+        # Scatter collections for episode data
+        self.reward_scatter = self.episode_ax.scatter([], [], 
+                                color='blue', alpha=0.5, s=10)
+        self.length_scatter = self.episode_ax.scatter([], [], 
+                                color='green', alpha=0.5, s=10)
+                                
+        # Line objects for moving averages and evaluation
+        self.eval_line, = self.episode_ax.plot([], [], 'r-', label='Eval Reward')
+        self.avg_reward_line, = self.episode_ax.plot([], [], 'b-', linewidth=2, 
+                                    label=f'Avg Reward ({self.window_size} ep)')
+        self.avg_length_line, = self.episode_ax.plot([], [], 'g-', linewidth=2,
+                                    label=f'Avg Length ({self.window_size} ep)')
+                                    
+        # Training metrics lines
+        self.loss_line, = self.training_ax.plot([], [], 'r-', label='Loss')
+        self.epsilon_line, = self.training_ax.plot([], [], 'g-', label='Epsilon')
+        self.lr_line, = self.lr_ax.plot([], [], 'b-', label='Learning Rate')
+        
+        # Set up legends once
+        self.ep_artists = [self.reward_scatter, self.length_scatter, 
+                        self.eval_line, self.avg_reward_line, self.avg_length_line]
+        self.ep_labels = ['Episode Reward', 'Episode Length', 'Eval Reward', 
+                        f'Avg Reward ({self.window_size} ep)', 
+                        f'Avg Length ({self.window_size} ep)']
+        self.episode_ax.legend(self.ep_artists, self.ep_labels, loc='upper left')
+        
+        all_artists = [self.loss_line, self.epsilon_line, self.lr_line]
+        all_labels = ['Loss', 'Epsilon', 'Learning Rate']
+        self.training_ax.legend(all_artists, all_labels, loc='upper left')
+        
         # Show the plot
         plt.tight_layout()
         plt.show(block=False)
     
-    def log_metrics(self, step, reward=None, length=None, eval_length=None, loss=None, lr=None, epsilon=None):
+    def log_metrics(self, step, reward=None, length=None, eval_reward=None, loss=None, lr=None, epsilon=None):
         """Log all metrics at once for a given step"""
         # If an episode was completed, update rolling averages
         if reward is not None:
@@ -82,7 +124,7 @@ class TrainingLogger:
         new_data = {
             'episode_reward': reward, 
             'episode_length': length,
-            'eval_length': eval_length,
+            'eval_reward': eval_reward,
             'loss': loss, 
             'learning_rate': lr, 
             'epsilon': epsilon,
@@ -106,124 +148,92 @@ class TrainingLogger:
         self.data = self.data.sort_index()
     
     def update_plot(self, save=False):
-        """Update the plot with current data"""
+        """Update the plot with current data - optimized version"""
         if self.data.empty:
             return
             
-        # Clear previous plots
-        self.episode_ax.clear()
-        self.training_ax.clear()
-        self.lr_ax.clear()
+        # Get data for each metric, only processing new points
+        changed = False  # Track if any data has changed
         
-        # Reset titles and limits
-        self.episode_ax.set_title('Episode Metrics')
-        self.episode_ax.set_ylabel('Episode Length / Reward')
-        self.episode_ax.set_ylim(0, 500)
-        
-        self.training_ax.set_title('Training Metrics')
-        self.training_ax.set_xlabel('Step')
-        self.training_ax.set_ylabel('Loss / Epsilon')
-        self.training_ax.set_ylim(0, 1)  # For loss and epsilon (0-1)
-        
-        self.lr_ax.set_ylabel('Learning Rate')
-        self.lr_ax.set_ylim(0, 0.1)  # For learning rate (0-0.1)
-        
-        # Drop NaN values for each metric
+        # Check each data series and update if new data exists
+        # Episode reward scatter
         reward_data = self.data['episode_reward'].dropna()
+        if not reward_data.empty and reward_data.index.max() > self.last_plotted_indices['episode_reward']:
+            new_x = reward_data.index.values
+            new_y = reward_data.values
+            self.reward_scatter.set_offsets(np.column_stack([new_x, new_y]))
+            self.last_plotted_indices['episode_reward'] = reward_data.index.max()
+            changed = True
+        
+        # Episode length scatter
         length_data = self.data['episode_length'].dropna()
-        eval_length_data = self.data['eval_length'].dropna()
+        if not length_data.empty and length_data.index.max() > self.last_plotted_indices['episode_length']:
+            new_x = length_data.index.values
+            new_y = length_data.values
+            self.length_scatter.set_offsets(np.column_stack([new_x, new_y]))
+            self.last_plotted_indices['episode_length'] = length_data.index.max()
+            changed = True
+        
+        # Evaluation reward line
+        eval_reward_data = self.data['eval_reward'].dropna()
+        if not eval_reward_data.empty and eval_reward_data.index.max() > self.last_plotted_indices['eval_reward']:
+            self.eval_line.set_data(eval_reward_data.index, eval_reward_data.values)
+            self.last_plotted_indices['eval_reward'] = eval_reward_data.index.max()
+            changed = True
+        
+        # Average reward line
         avg_reward_data = self.data['avg_reward'].dropna()
+        if not avg_reward_data.empty and avg_reward_data.index.max() > self.last_plotted_indices['avg_reward']:
+            self.avg_reward_line.set_data(avg_reward_data.index, avg_reward_data.values)
+            self.last_plotted_indices['avg_reward'] = avg_reward_data.index.max()
+            changed = True
+        
+        # Average length line
         avg_length_data = self.data['avg_length'].dropna()
+        if not avg_length_data.empty and avg_length_data.index.max() > self.last_plotted_indices['avg_length']:
+            self.avg_length_line.set_data(avg_length_data.index, avg_length_data.values)
+            self.last_plotted_indices['avg_length'] = avg_length_data.index.max()
+            changed = True
+        
+        # Loss line
         loss_data = self.data['loss'].dropna()
-        lr_data = self.data['learning_rate'].dropna()
+        if not loss_data.empty and loss_data.index.max() > self.last_plotted_indices['loss']:
+            self.loss_line.set_data(loss_data.index, loss_data.values)
+            self.last_plotted_indices['loss'] = loss_data.index.max()
+            changed = True
+        
+        # Epsilon line
         epsilon_data = self.data['epsilon'].dropna()
+        if not epsilon_data.empty and epsilon_data.index.max() > self.last_plotted_indices['epsilon']:
+            self.epsilon_line.set_data(epsilon_data.index, epsilon_data.values)
+            self.last_plotted_indices['epsilon'] = epsilon_data.index.max()
+            changed = True
         
-        # Track artists for legends
-        ep_artists = []
-        ep_labels = []
-        train_artists = []
-        train_labels = []
-        lr_artists = []
-        lr_labels = []
+        # Learning rate line
+        lr_data = self.data['learning_rate'].dropna()
+        if not lr_data.empty and lr_data.index.max() > self.last_plotted_indices['learning_rate']:
+            self.lr_line.set_data(lr_data.index, lr_data.values)
+            self.last_plotted_indices['learning_rate'] = lr_data.index.max()
+            changed = True
         
-        # ===== Plot episode metrics =====
-        # Scatter plots for individual episodes
-        if not reward_data.empty:
-            sc1 = self.episode_ax.scatter(reward_data.index, reward_data.values, 
-                                    color='blue', alpha=0.5, s=10)
-            ep_artists.append(sc1)
-            ep_labels.append('Episode Reward')
-        
-        if not length_data.empty:
-            sc2 = self.episode_ax.scatter(length_data.index, length_data.values, 
-                                    color='green', alpha=0.5, s=10)
-            ep_artists.append(sc2)
-            ep_labels.append('Episode Length')
-        
-        # Line plot for evaluation length
-        if not eval_length_data.empty:
-            ln1 = self.episode_ax.plot(eval_length_data.index, eval_length_data.values, 
-                                  'r-')[0]
-            ep_artists.append(ln1)
-            ep_labels.append('Eval Length')
-        
-        # Line plots for rolling averages
-        if not avg_reward_data.empty:
-            ln2 = self.episode_ax.plot(avg_reward_data.index, avg_reward_data.values, 
-                                  'b-', linewidth=2)[0]
-            ep_artists.append(ln2)
-            ep_labels.append(f'Avg Reward ({self.window_size} ep)')
-        
-        if not avg_length_data.empty:
-            ln3 = self.episode_ax.plot(avg_length_data.index, avg_length_data.values, 
-                                  'g-', linewidth=2)[0]
-            ep_artists.append(ln3)
-            ep_labels.append(f'Avg Length ({self.window_size} ep)')
-        
-        # ===== Plot training metrics =====
-        # Plot loss and epsilon on left axis
-        if not loss_data.empty:
-            ln4 = self.training_ax.plot(loss_data.index, loss_data.values, 
-                                   'r-')[0]
-            train_artists.append(ln4)
-            train_labels.append('Loss')
-        
-        if not epsilon_data.empty:
-            ln5 = self.training_ax.plot(epsilon_data.index, epsilon_data.values, 
-                                   'g-')[0]
-            train_artists.append(ln5)
-            train_labels.append('Epsilon')
-        
-        # Plot learning rate on right axis
-        if not lr_data.empty:
-            ln6 = self.lr_ax.plot(lr_data.index, lr_data.values, 
-                             'b-')[0]
-            lr_artists.append(ln6)
-            lr_labels.append('Learning Rate')
-        
-        # Add legends only if there are artists to show
-        if ep_artists:
-            self.episode_ax.legend(ep_artists, ep_labels, loc='upper left')
-        
-        # Combine training and learning rate legends
-        if train_artists or lr_artists:
-            all_artists = train_artists + lr_artists
-            all_labels = train_labels + lr_labels
-            if all_artists:  # Only create legend if there are artists
-                self.training_ax.legend(all_artists, all_labels, loc='upper left')
-        
-        # Update layout
-        plt.tight_layout()
-        
-        # Refresh plot
-        try:
-            self.fig.canvas.draw()
+        # Only update limits and redraw if something changed
+        if changed or self.is_first_plot:
+            # Update axes limits only when needed
+            self.episode_ax.relim()
+            self.episode_ax.autoscale_view()
+            self.training_ax.relim()
+            self.training_ax.autoscale_view()
+            self.lr_ax.relim()
+            self.lr_ax.autoscale_view()
+            
+            # Use more efficient canvas operations
+            self.fig.canvas.draw_idle()
             self.fig.canvas.flush_events()
-            plt.pause(0.001)  # Allow GUI to process events
-        except Exception as e:
-            print(f"Warning: Could not update plot interactively: {e}")
+            
+            # Mark that we've done at least one plot
+            self.is_first_plot = False
         
-        # Save plot if requested
+        # Save plot if requested (without redrawing if possible)
         if save:
             plt.savefig(os.path.join(self.log_dir, 'training_metrics.png'))
     

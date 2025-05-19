@@ -24,14 +24,14 @@ class DQNAgent:
         self.gamma = 0.99                   # Discount factor
         self.epsilon = 1.0                  # Exploration rate
         self.epsilon_min = 0.005             # Minimum exploration probability
-        self.epsilon_decay = 0.99           # Exponential decay rate for exploration
-        self.batch_size = 512              # Size of batches for training
-        self.learning_rate = .05             # Initial learning rate
-        self.learning_rate_decay = .998       # learning rate decay 
-        self.epochs = 5
+        self.epsilon_decay = 0.995           # Exponential decay rate for exploration
+        self.batch_size = 2048              # Size of batches for training
+        self.learning_rate = .01             # Initial learning rate
+        self.learning_rate_decay = .999       # learning rate decay 
+        self.epochs = 1
         self.train_frequency = 1           # How many time steps between training runs
-        self.update_target_frequency = 50  # How often to HARD update target network (steps)
-        self.tau = 0.005                    # Soft update parameter (happens every step)
+        self.update_target_frequency = 100  # How often to HARD update target network (steps)
+        self.tau = 0.05                    # Soft update parameter (happens every training)
 
         self.train_start = 2* self.batch_size  # Minimum experiences before training
 
@@ -138,9 +138,13 @@ class DQNAgent:
         return tf.argmax(q_values, axis=1, output_type=tf.int32)
 
     # This function handles all randomness outside the graph. For some reason the decorator breaks it. Something about randomness in tf graphs being weird
-    def explore_batch(self, actions):
+    def explore_batch(self, actions, seed=None):
         """Handles epsilon-greedy exploration using pure TensorFlow operations"""
         batch_size = tf.shape(actions)[0]
+        
+        # Set seed for reproducibility if provided
+        if seed is not None:
+            tf.random.set_seed(seed)
         
         # Generate exploration mask using TensorFlow random ops
         explore_mask = tf.random.uniform(shape=[batch_size], minval=0, maxval=1) < self.epsilon
