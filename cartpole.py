@@ -167,7 +167,7 @@ def main():
     
     # Training hyperparameters
     TOTAL_TIMESTEPS = 10_000_000  # Total training steps
-    EVAL_FREQUENCY = 300          # How often to run evaluation episodes
+    EVAL_FREQUENCY = 100          # How often to run evaluation episodes
     SAVE_FREQUENCY = 5_000        # How often to save the model
     LOG_FREQUENCY = 25            # How often to print logs
        
@@ -243,7 +243,7 @@ def main():
             # Update metrics for each environment
             env_steps += 1  # Increment steps for all environments
             env_rewards += custom_rewards.numpy()  # Add rewards to running totals
-            total_steps += n_envs
+            total_steps += 1
 
             # Log metrics
             logger.log_metrics(
@@ -276,14 +276,21 @@ def main():
             if total_steps % agent.train_frequency == 0:
                 loss = agent.replay()
                 logger.log_metrics(step=total_steps, loss=loss)
+
+                #soft update the target model
+                agent.update_target_model(tau=agent.tau)
             
-            # Update target model periodically
-            if total_steps % agent.update_target_frequency == 0:
-                agent.update_target_model()
-                print("Target model updated")
             
             # Occasionally print memory usage
-            if total_steps % (LOG_FREQUENCY * 50) == 0:
+            if total_steps % (LOG_FREQUENCY) == 0:
+                total_training_time = time.time() - training_start_time
+                hours, remainder = divmod(total_training_time, 3600)
+                minutes, seconds = divmod(remainder, 60)
+                print(f"Total training time: {int(hours)}h {int(minutes)}m {seconds:.2f}s")
+                print("Steps: " + str(total_steps))
+                print("Memory: "+ str(int(agent.memory.current_size)) + " / " + str(int(agent.memory.buffer_size)))
+
+            if total_steps % (LOG_FREQUENCY * 10) == 0:
                 print_memory_usage()
                 print_gpu_memory()
             
@@ -296,7 +303,6 @@ def main():
                 parent_conn.send((model_path, total_steps))
                 evaluation_pending = True
                 last_eval_step = total_steps
-                print(f"Evaluation requested at step {total_steps}")
             
             # Check if evaluation results are available
             if evaluation_pending and parent_conn.poll():
@@ -312,12 +318,17 @@ def main():
                         
                         # Log evaluation results
                         logger.log_metrics(step=eval_step, eval_length=eval_score)
-                        print(f"\n--- EVALUATION at step {eval_step}: Score: {eval_score}, Avg Reward: {eval_reward:.4f}")
+                        print(f"--- EVALUATION at step {eval_step}: Score: {eval_score}, Avg Reward: {eval_reward:.4f}")
                     
                     # Mark evaluation as completed
                     evaluation_pending = False
                 except Exception as e:
                     print(f"Error processing evaluation result: {e}")
+
+            # HARD update target model periodically
+            if total_steps % agent.update_target_frequency == 0:
+                agent.update_target_model(tau=1.0)
+                print("Target model hard updated")
             
             # Update plot periodically based on time rather than steps
             logger.maybe_update_plot(

@@ -23,15 +23,17 @@ class DQNAgent:
         self.memory_len = 50_000            # Experience replay buffer
         self.gamma = 0.99                   # Discount factor
         self.epsilon = 1.0                  # Exploration rate
-        self.epsilon_min = 0.05             # Minimum exploration probability
+        self.epsilon_min = 0.005             # Minimum exploration probability
         self.epsilon_decay = 0.99           # Exponential decay rate for exploration
-        self.batch_size = 4096              # Size of batches for training
+        self.batch_size = 512              # Size of batches for training
+        self.learning_rate = .05             # Initial learning rate
+        self.learning_rate_decay = .998       # learning rate decay 
+        self.epochs = 5
+        self.train_frequency = 1           # How many time steps between training runs
+        self.update_target_frequency = 50  # How often to HARD update target network (steps)
+        self.tau = 0.005                    # Soft update parameter (happens every step)
+
         self.train_start = 2* self.batch_size  # Minimum experiences before training
-        self.train_frequency = 25           # How many time steps between training runs
-        self.update_target_frequency = 600  # How often to update target network (steps)
-        self.learning_rate = .08             # Initial learning rate
-        self.learning_rate_decay = 1       # learning rate decay 
-        self.epochs = 10
 
         # create memory object
         self.memory = TFReplayBuffer(state_size, action_size, buffer_size=self.memory_len)
@@ -39,7 +41,7 @@ class DQNAgent:
         # learning rate scheduler for adam optimizer
         self.lr_schedule = keras.optimizers.schedules.ExponentialDecay(
             initial_learning_rate=self.learning_rate,
-            decay_steps=10,
+            decay_steps=1,
             decay_rate=self.learning_rate_decay)
         self.optimizer_steps = 0
 
@@ -77,11 +79,33 @@ class DQNAgent:
             Dense(self.action_size, activation='linear')
         ])
         model.compile(loss=Huber(delta=10.0), optimizer=self.optimizer)
+        # model.compile(loss='mse', optimizer=self.optimizer)
         return model
     
-    def update_target_model(self):
-        """Copy weights from model to target_model"""
-        self.target_model.set_weights(self.model.get_weights())
+    def update_target_model(self, tau=1.0):
+        """
+        Update target model weights.
+        
+        Args:
+            tau: Float between 0 and 1. If tau=1.0, performs a hard update 
+                 (complete copy). If tau<1.0, performs a soft update where
+                 target_weights = tau * model_weights + (1 - tau) * target_weights
+        """
+        if tau >= 1.0:
+            # Standard hard update (complete copy)
+            self.target_model.set_weights(self.model.get_weights())
+        else:
+            # Soft update
+            model_weights = self.model.get_weights()
+            target_weights = self.target_model.get_weights()
+            
+            # Blend weights
+            updated_weights = []
+            for model_w, target_w in zip(model_weights, target_weights):
+                updated_w = tau * model_w + (1 - tau) * target_w
+                updated_weights.append(updated_w)
+            
+            self.target_model.set_weights(updated_weights)
 
     def get_current_learning_rate(self):
         return self.lr_schedule(self.optimizer_steps).numpy()

@@ -25,6 +25,7 @@ class TFReplayBuffer:
     
     def add(self, states_batch, actions_batch, rewards_batch, next_states_batch, dones_batch):
         # Get the range of indices to update
+
         batch_size = tf.shape(states_batch)[0]
         end_idx = self.current_idx + batch_size
         
