@@ -24,11 +24,11 @@ class DQNAgent:
         self.gamma = 0.99                   # Discount factor
         self.epsilon = 1.0                  # Exploration rate
         self.epsilon_min = 0.005             # Minimum exploration probability
-        self.epsilon_decay = 0.995           # Exponential decay rate for exploration
+        self.epsilon_decay = 0.99            # Exponential decay rate for exploration
         self.batch_size = 2048              # Size of batches for training
         self.learning_rate = .01             # Initial learning rate
         self.learning_rate_decay = .999       # learning rate decay 
-        self.epochs = 1
+        self.epochs = 10
         self.train_frequency = 1           # How many time steps between training runs
         self.update_target_frequency = 100  # How often to HARD update target network (steps)
         self.tau = 0.05                    # Soft update parameter (happens every training)

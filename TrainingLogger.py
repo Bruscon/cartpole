@@ -32,7 +32,7 @@ class TrainingLogger:
         
         # Setup for non-blocking updates
         self.last_update_time = time.time()
-        self.update_interval = 1.0  # Update plot every 1 second
+        self.update_interval = 3.0  # Update plot every 3 second
         
         # Tracking for efficiency
         self.is_first_plot = True
