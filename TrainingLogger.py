@@ -79,29 +79,28 @@ class TrainingLogger:
         avg_length = np.mean(self.length_window) if self.length_window else np.nan
         
         # Create a new row with NaN values
-        new_data = pd.Series(
-            {
-                'episode_reward': reward, 
-                'episode_length': length,
-                'eval_length': eval_length,
-                'loss': loss, 
-                'learning_rate': lr, 
-                'epsilon': epsilon,
-                'avg_reward': avg_reward if not np.isnan(avg_reward) else None,
-                'avg_length': avg_length if not np.isnan(avg_length) else None
-            }, 
-            name=step
-        )
+        new_data = {
+            'episode_reward': reward, 
+            'episode_length': length,
+            'eval_length': eval_length,
+            'loss': loss, 
+            'learning_rate': lr, 
+            'epsilon': epsilon,
+            'avg_reward': avg_reward if not np.isnan(avg_reward) else None,
+            'avg_length': avg_length if not np.isnan(avg_length) else None
+        }
+        
+        # Filter out None values to avoid the warning
+        new_data = {k: v for k, v in new_data.items() if v is not None}
         
         # If this step already exists, update non-None values
         if step in self.data.index:
-            for column in self.data.columns:
-                value = new_data[column]
-                if pd.notna(value):  # Only update if the new value is not NaN
-                    self.data.at[step, column] = value
+            for column, value in new_data.items():
+                self.data.at[step, column] = value
         else:
             # Otherwise add the new row
-            self.data = pd.concat([self.data, pd.DataFrame([new_data])])
+            new_row = pd.DataFrame([new_data], index=[step])
+            self.data = pd.concat([self.data, new_row])
             
         # Sort by index (step)
         self.data = self.data.sort_index()
@@ -139,50 +138,79 @@ class TrainingLogger:
         lr_data = self.data['learning_rate'].dropna()
         epsilon_data = self.data['epsilon'].dropna()
         
+        # Track artists for legends
+        ep_artists = []
+        ep_labels = []
+        train_artists = []
+        train_labels = []
+        lr_artists = []
+        lr_labels = []
+        
         # ===== Plot episode metrics =====
         # Scatter plots for individual episodes
         if not reward_data.empty:
-            self.episode_ax.scatter(reward_data.index, reward_data.values, 
-                                   color='blue', alpha=0.5, s=10, label='Episode Reward')
+            sc1 = self.episode_ax.scatter(reward_data.index, reward_data.values, 
+                                    color='blue', alpha=0.5, s=10)
+            ep_artists.append(sc1)
+            ep_labels.append('Episode Reward')
         
         if not length_data.empty:
-            self.episode_ax.scatter(length_data.index, length_data.values, 
-                                   color='green', alpha=0.5, s=10, label='Episode Length')
+            sc2 = self.episode_ax.scatter(length_data.index, length_data.values, 
+                                    color='green', alpha=0.5, s=10)
+            ep_artists.append(sc2)
+            ep_labels.append('Episode Length')
         
         # Line plot for evaluation length
         if not eval_length_data.empty:
-            self.episode_ax.plot(eval_length_data.index, eval_length_data.values, 
-                                'r-', label='Eval Length')
+            ln1 = self.episode_ax.plot(eval_length_data.index, eval_length_data.values, 
+                                  'r-')[0]
+            ep_artists.append(ln1)
+            ep_labels.append('Eval Length')
         
         # Line plots for rolling averages
         if not avg_reward_data.empty:
-            self.episode_ax.plot(avg_reward_data.index, avg_reward_data.values, 
-                                'b-', linewidth=2, label=f'Avg Reward ({self.window_size} ep)')
+            ln2 = self.episode_ax.plot(avg_reward_data.index, avg_reward_data.values, 
+                                  'b-', linewidth=2)[0]
+            ep_artists.append(ln2)
+            ep_labels.append(f'Avg Reward ({self.window_size} ep)')
         
         if not avg_length_data.empty:
-            self.episode_ax.plot(avg_length_data.index, avg_length_data.values, 
-                                'g-', linewidth=2, label=f'Avg Length ({self.window_size} ep)')
+            ln3 = self.episode_ax.plot(avg_length_data.index, avg_length_data.values, 
+                                  'g-', linewidth=2)[0]
+            ep_artists.append(ln3)
+            ep_labels.append(f'Avg Length ({self.window_size} ep)')
         
         # ===== Plot training metrics =====
         # Plot loss and epsilon on left axis
         if not loss_data.empty:
-            self.training_ax.plot(loss_data.index, loss_data.values, 
-                                 'r-', label='Loss')
+            ln4 = self.training_ax.plot(loss_data.index, loss_data.values, 
+                                   'r-')[0]
+            train_artists.append(ln4)
+            train_labels.append('Loss')
         
         if not epsilon_data.empty:
-            self.training_ax.plot(epsilon_data.index, epsilon_data.values, 
-                                 'g-', label='Epsilon')
+            ln5 = self.training_ax.plot(epsilon_data.index, epsilon_data.values, 
+                                   'g-')[0]
+            train_artists.append(ln5)
+            train_labels.append('Epsilon')
         
         # Plot learning rate on right axis
         if not lr_data.empty:
-            self.lr_ax.plot(lr_data.index, lr_data.values, 
-                           'b-', label='Learning Rate')
+            ln6 = self.lr_ax.plot(lr_data.index, lr_data.values, 
+                             'b-')[0]
+            lr_artists.append(ln6)
+            lr_labels.append('Learning Rate')
         
-        # Add legends
-        self.episode_ax.legend(loc='upper left')
-        handles1, labels1 = self.training_ax.get_legend_handles_labels()
-        handles2, labels2 = self.lr_ax.get_legend_handles_labels()
-        self.training_ax.legend(handles1 + handles2, labels1 + labels2, loc='upper left')
+        # Add legends only if there are artists to show
+        if ep_artists:
+            self.episode_ax.legend(ep_artists, ep_labels, loc='upper left')
+        
+        # Combine training and learning rate legends
+        if train_artists or lr_artists:
+            all_artists = train_artists + lr_artists
+            all_labels = train_labels + lr_labels
+            if all_artists:  # Only create legend if there are artists
+                self.training_ax.legend(all_artists, all_labels, loc='upper left')
         
         # Update layout
         plt.tight_layout()
