@@ -21,17 +21,17 @@ class DQNAgent:
         
         # Hyperparameters
         self.memory_len = 500_000            # Experience replay buffer
-        self.gamma = 0.99                   # Discount factor
+        self.gamma = 0.999                   # Discount factor
         self.epsilon = 1.0                  # Exploration rate
-        self.epsilon_min = 0.005             # Minimum exploration probability
-        self.epsilon_decay = 0.99            # Exponential decay rate for exploration
-        self.batch_size = 2048              # Size of batches for training
-        self.learning_rate = .05             # Initial learning rate
+        self.epsilon_min = 0.1             # Minimum exploration probability
+        self.epsilon_decay = 0.995            # Exponential decay rate for exploration
+        self.batch_size = 3000              # Size of batches for training
+        self.learning_rate = .02             # Initial learning rate
         self.learning_rate_decay = 1      # learning rate decay 
-        self.epochs = 3
+        self.epochs = 10
         self.train_frequency = 2           # How many time steps between training runs
         self.update_target_frequency = 1000000  # How often to HARD update target network (steps)
-        self.tau = 0.08                    # Soft update parameter (happens every training)
+        self.tau = 0.05                    # Soft update parameter (happens every training)
 
         self.train_start = 2* self.batch_size  # Minimum experiences before training
 
@@ -51,16 +51,16 @@ class DQNAgent:
             # Wrap optimizer for mixed precision
             self.optimizer = tf.keras.mixed_precision.LossScaleOptimizer(self.optimizer)
 
-        # Load or build the main model
-        if initial_model_path and os.path.exists(initial_model_path):
-            print(f"Loading initial model from: {initial_model_path}")
-            self.model = self._build_model()  # Create a fresh model with our architecture
-            # Only load weights, not the optimizer state
-            temp_model = tf.keras.models.load_model(initial_model_path)
-            self.model.set_weights(temp_model.get_weights())
-            del temp_model  # Free memory
-        else:
-            self.model = self._build_model()
+        # # Load or build the main model
+        # if initial_model_path and os.path.exists(initial_model_path):
+        #     print(f"Loading initial model from: {initial_model_path}")
+        #     self.model = self._build_model()  # Create a fresh model with our architecture
+        #     # Only load weights, not the optimizer state
+        #     temp_model = tf.keras.models.load_model(initial_model_path)
+        #     self.model.set_weights(temp_model.get_weights())
+        #     del temp_model  # Free memory
+        # else:
+        self.model = self._build_model()
 
         
         # Target model - used for more stable Q-value predictions

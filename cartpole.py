@@ -133,8 +133,10 @@ def calculate_custom_rewards(cart_positions, pole_angles, terminations, truncati
     position_rewards = tf.maximum(0.0, 1.0 - (tf.abs(cart_positions) / MAX_POSITION))
     
     # Base rewards
-    custom_rewards = 0.7 * angle_rewards + 0.3 * position_rewards
+    # custom_rewards = 0.5 * angle_rewards + 0.5 * position_rewards
     
+    custom_rewards = angle_rewards * position_rewards
+
     # Apply termination penalty
     dones = tf.logical_or(terminations, truncations)
     # custom_rewards = tf.where(dones, tf.constant(-10.0, dtype=tf.float32), custom_rewards)
@@ -163,7 +165,7 @@ def main():
     
     # Training hyperparameters
     TOTAL_TIMESTEPS = 10_000_000  # Total training steps
-    EVAL_FREQUENCY = 50          # How often to run evaluation episodes
+    EVAL_FREQUENCY = 10          # How often to run evaluation episodes
     SAVE_FREQUENCY = 5_000        # How often to save the model
     LOG_FREQUENCY = 25            # How often to print logs
        
