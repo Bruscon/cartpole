@@ -137,7 +137,7 @@ def calculate_custom_rewards(cart_positions, pole_angles, terminations, truncati
     
     # Apply termination penalty
     dones = tf.logical_or(terminations, truncations)
-    custom_rewards = tf.where(dones, tf.constant(-1.0, dtype=tf.float32), custom_rewards)
+    # custom_rewards = tf.where(dones, tf.constant(-10.0, dtype=tf.float32), custom_rewards)
     
     return custom_rewards, dones
 
@@ -150,7 +150,7 @@ def main():
 
     
     # Create environment, vectorized
-    n_envs = 16  
+    n_envs = 64  
     gym_envs = gym.make_vec("CartPole-v1", num_envs=n_envs, vectorization_mode="async")
     # Wrap with TF adapter
     envs = TFWrappedVecEnv(gym_envs)

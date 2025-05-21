@@ -20,18 +20,18 @@ class DQNAgent:
         self.initial_model_path = initial_model_path
         
         # Hyperparameters
-        self.memory_len = 50_000            # Experience replay buffer
+        self.memory_len = 500_000            # Experience replay buffer
         self.gamma = 0.99                   # Discount factor
         self.epsilon = 1.0                  # Exploration rate
         self.epsilon_min = 0.005             # Minimum exploration probability
         self.epsilon_decay = 0.99            # Exponential decay rate for exploration
         self.batch_size = 2048              # Size of batches for training
-        self.learning_rate = .01             # Initial learning rate
-        self.learning_rate_decay = .999       # learning rate decay 
-        self.epochs = 10
-        self.train_frequency = 1           # How many time steps between training runs
-        self.update_target_frequency = 100  # How often to HARD update target network (steps)
-        self.tau = 0.05                    # Soft update parameter (happens every training)
+        self.learning_rate = .05             # Initial learning rate
+        self.learning_rate_decay = 1      # learning rate decay 
+        self.epochs = 3
+        self.train_frequency = 2           # How many time steps between training runs
+        self.update_target_frequency = 1000000  # How often to HARD update target network (steps)
+        self.tau = 0.08                    # Soft update parameter (happens every training)
 
         self.train_start = 2* self.batch_size  # Minimum experiences before training
 
