@@ -24,12 +24,12 @@ class DQNAgent:
         self.gamma = 0.999                   # Discount factor
         self.epsilon = 1.0                  # Exploration rate
         self.epsilon_min = 0.1             # Minimum exploration probability
-        self.epsilon_decay = 0.995            # Exponential decay rate for exploration
+        self.epsilon_decay = 0.998            # Exponential decay rate for exploration
         self.batch_size = 3000              # Size of batches for training
-        self.learning_rate = .02             # Initial learning rate
-        self.learning_rate_decay = 1      # learning rate decay 
-        self.epochs = 10
-        self.train_frequency = 2           # How many time steps between training runs
+        self.learning_rate = .05             # Initial learning rate
+        self.learning_rate_decay = .998      # learning rate decay 
+        self.epochs = 3
+        self.train_frequency = 1           # How many time steps between training runs
         self.update_target_frequency = 1000000  # How often to HARD update target network (steps)
         self.tau = 0.05                    # Soft update parameter (happens every training)
 
@@ -74,8 +74,8 @@ class DQNAgent:
         """Neural Network for Deep-Q learning Model"""
         model = Sequential([
             Input(shape=(self.state_size,)),
-            Dense(24, activation='relu'),
-            Dense(24, activation='relu'),
+            Dense(12, activation='relu'),
+            Dense(12, activation='relu'),
             Dense(self.action_size, activation='linear')
         ])
         model.compile(loss=Huber(delta=10.0), optimizer=self.optimizer)
