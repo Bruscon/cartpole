@@ -81,7 +81,7 @@ class TrainingLogger:
                                 color='green', alpha=0.5, s=10)
                                 
         # Line objects for moving averages and evaluation
-        self.eval_line, = self.episode_ax.plot([], [], 'r-', label='Eval Reward')
+        self.eval_line, = self.episode_ax.plot([], [], 'r-', label='Evaluation Reward')
         self.avg_reward_line, = self.episode_ax.plot([], [], 'b-', linewidth=2, 
                                     label=f'Avg Reward ({self.window_size} ep)')
         self.avg_length_line, = self.episode_ax.plot([], [], 'g-', linewidth=2,

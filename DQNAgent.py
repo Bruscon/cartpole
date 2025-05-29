@@ -20,6 +20,7 @@ class DQNAgent:
         self.initial_model_path = initial_model_path
         
         # Hyperparameters
+        self.clipnorm = 2.0                 # gradient clipping. reduce to 1 if gradients explode.
         self.memory_len = 500_000            # Experience replay buffer
         self.gamma = 0.999                   # Discount factor
         self.epsilon = 1.0                  # Exploration rate
@@ -30,7 +31,7 @@ class DQNAgent:
         self.learning_rate_decay = .998      # learning rate decay 
         self.epochs = 3
         self.train_frequency = 1           # How many time steps between training runs
-        self.update_target_frequency = 1000000  # How often to HARD update target network (steps)
+        self.update_target_frequency = 1000000  # How often to HARD update target network (steps). effectively disabled
         self.tau = 0.05                    # Soft update parameter (happens every training)
 
         self.train_start = 2* self.batch_size  # Minimum experiences before training
@@ -46,7 +47,7 @@ class DQNAgent:
         self.optimizer_steps = 0
 
         # optimizer config 
-        self.optimizer = Adam(learning_rate=self.lr_schedule, clipnorm=1.0)
+        self.optimizer = Adam(learning_rate=self.lr_schedule, clipnorm=self.clipnorm)
         if tf.keras.mixed_precision.global_policy().name == 'mixed_float16':
             # Wrap optimizer for mixed precision
             self.optimizer = tf.keras.mixed_precision.LossScaleOptimizer(self.optimizer)
@@ -240,13 +241,13 @@ class DQNAgent:
         targets = self._compute_targets(states, actions, rewards, next_states, dones)
         
         # Train the network with optimized batch processing
-        history = self.model.fit(
-            states, 
-            targets, 
-            epochs=self.epochs, 
-            verbose=0, 
-            batch_size=self.batch_size
-        )
+        total_loss = 0.0
+        td_errors = None
+        for epoch in range(self.epochs):
+            loss, td_errors = self.train_on_batch_with_td_errors(states, actions, targets)
+            total_loss += loss
+        
+        avg_loss = total_loss / self.epochs
         
         # decay epsilon 
         if (self.epsilon > self.epsilon_min):
@@ -254,11 +255,60 @@ class DQNAgent:
 
         # This decays the learning rate
         self.optimizer_steps += 1
-
-        # Increment global step and track loss
-        loss = history.history['loss'][0]
             
-        return loss
+        return avg_loss
+
+    @tf.function
+    def train_on_batch_with_td_errors(self, states, actions, targets):
+        """
+        Custom training function that returns both loss and TD errors.
+        Replace model.fit() with this to get individual TD errors for PER.
+        
+        Args:
+            states: Input states tensor
+            actions: Actions taken (needed to extract specific TD errors)
+            targets: Target Q-values tensor (full Q-value array)
+        
+        Returns:
+            loss: Scalar loss value
+            td_errors: Tensor of TD errors for each sample
+        """
+        with tf.GradientTape() as tape:
+            # Forward pass
+            q_values = self.model(states, training=True)
+            
+            # Calculate loss using Huber loss
+            loss = self.model.compiled_loss(targets, q_values)
+            
+            # If using mixed precision, scale the loss
+            if hasattr(self.optimizer, 'get_scaled_loss'):
+                scaled_loss = self.optimizer.get_scaled_loss(loss)
+            else:
+                scaled_loss = loss
+        
+        # Calculate gradients
+        gradients = tape.gradient(scaled_loss, self.model.trainable_variables)
+        
+        # If using mixed precision, unscale gradients
+        if hasattr(self.optimizer, 'get_unscaled_gradients'):
+            gradients = self.optimizer.get_unscaled_gradients(gradients)
+        
+        # Apply gradients
+        self.optimizer.apply_gradients(zip(gradients, self.model.trainable_variables))
+        
+        # Calculate TD errors for the specific actions taken
+        batch_size = tf.shape(states)[0]
+        indices = tf.range(batch_size)
+        action_indices = tf.stack([indices, tf.cast(actions, tf.int32)], axis=1)
+        
+        # Extract Q-values for actions taken
+        predicted_q = tf.gather_nd(q_values, action_indices)
+        target_q = tf.gather_nd(targets, action_indices)
+        
+        # TD errors are the absolute difference
+        td_errors = tf.abs(target_q - predicted_q)
+        
+        return loss, td_errors
     
     def save_model(self, episode):
         """Save model checkpoint"""

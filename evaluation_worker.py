@@ -14,17 +14,6 @@ import time
 MAX_ANGLE = 0.2095  # Maximum angle before termination (in radians)
 MAX_POSITION = 2.4  # Maximum cart position
 
-def create_model(state_size, action_size):
-    """Create the same model architecture as in DQNAgent"""
-    model = Sequential([
-        Input(shape=(state_size,)),
-        Dense(24, activation='relu'),
-        Dense(24, activation='relu'),
-        Dense(action_size, activation='linear')
-    ])
-    # We don't need to compile the model for inference only
-    return model
-
 def run_evaluation_episode(model, eval_env, state_size):
     """Run a single evaluation episode with the provided model and environment"""
     done = False
