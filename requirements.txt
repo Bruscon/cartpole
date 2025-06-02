@@ -1,0 +1,18 @@
+# Core RL and ML dependencies
+gymnasium>=0.29.0
+tensorflow>=2.13.0
+numpy>=1.24.0
+
+# Data processing and visualization
+matplotlib>=3.7.0
+pandas>=2.0.0
+
+# System monitoring and profiling
+psutil>=5.9.0
+
+# Optional: For mixed precision training on newer GPUs
+# tensorflow-gpu>=2.13.0  # Use if you have specific GPU requirements
+
+# Development and debugging (optional)
+# jupyter>=1.0.0
+# ipython>=8.0.0
