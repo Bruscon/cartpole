@@ -9,7 +9,10 @@ A heavily optimized Deep Double Q-Network implementation that solves CartPole-v1
 ![Training Progress](media/training_metrics.png)
 *Training plots showing rapid convergence*
 
-![Solved CartPole](media/cartpole_demo.webm)
+<video width="400" controls>
+  <source src="media/cartpole_demo.webm" type="video/webm">
+  Your browser does not support the video tag.
+</video>
 *Trained agent balancing the pole*
 
 Typically, cartpole is considered "solved" when the rolling average episode score is >195. My implementation defines it as continuously scoring a perfect 500 on evaluation episodes (no epsilon)
