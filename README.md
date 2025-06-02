@@ -60,16 +60,6 @@ The SumTree implementation alone represents a significant algorithmic contributi
 - Compact 12→12→2 network for minimal computational overhead. Network forward passes and backpropogation run on a custom training loop on GPU
 - Optimized hyperparameters: γ=0.998, τ=0.06, α=0.7. This is extremely aggressive for Q learning generally but works great for this simple environment. 
 
-## Usage
-
-```bash
-# Quick start
-./run_cartpole_training.sh
-
-# With custom parameters
-python cartpole.py --log-dir="experiment_1" --graphics
-```
-
 Training automatically generates:
 - Real-time performance visualizations
 - Model checkpoints with evaluation metrics
@@ -77,17 +67,53 @@ Training automatically generates:
 - Backups of scripts so you know what you changed!
 
 
+## Installation
+
+**Platform Support:** Linux only (tested on Ubuntu 22.04)
+
+### Prerequisites
+```bash
+# Verify NVIDIA GPU and drivers
+nvidia-smi
+
+# Install CUDA toolkit (if not already installed)
+sudo apt update
+sudo apt install nvidia-cuda-toolkit
+```
+This implementation MAY work without an NVIDIA GPU/CUDA but I have not tested it. 
+
+### Setup
+```bash
+# Clone repository
+git clone https://github.com/Bruscon/cartpole.git
+cd cartpole
+
+# Create virtual environment (recommended)
+python3 -m venv rl-env
+source rl-env/bin/activate
+
+# Install dependencies
+pip install -r requirements.txt
+
+# Verify GPU detection
+python -c "import tensorflow as tf; print('GPUs:', tf.config.list_physical_devices('GPU'))"
+```
+
+### Quick Start
+```bash
+# Make training script executable
+chmod +x run_cartpole_training.sh
+
+# Start training (logs to timestamped directory)
+./run_cartpole_training.sh
+```
+
 ## Hardware Requirements
 
-- NVIDIA GPU with CUDA support (tested on RTX 3090)
-- 8GB+ system RAM
-- TensorFlow 2.x with GPU support
-
-## Dependencies
-
-```
-gymnasium tensorflow numpy matplotlib pandas psutil
-```
+- **OS**: Linux (Ubuntu 22.04 tested)
+- **GPU**: NVIDIA with CUDA support (RTX 3090 tested)
+- **RAM**: 8GB+ system memory
+- **Storage**: 1GB for logs and model checkpoints
 
 ---
 
