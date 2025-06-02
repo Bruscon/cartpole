@@ -7,15 +7,17 @@ A heavily optimized Deep Double Q-Network implementation that solves CartPole-v1
 ## Performance Overview
 
 ![Training Progress](media/training_metrics.png)
-*Real-time training visualization showing convergence in <60 seconds*
+*Training plots showing rapid convergence*
 
 ![Solved CartPole](media/cartpole_demo.webm)
 *Trained agent balancing the pole*
 
+Typically, cartpole is considered "solved" when the rolling average episode score is >195. My implementation defines it as continuously scoring a perfect 500 on evaluation episodes (no epsilon)
+
 **Key Metrics:**
 - **Training time**: <60 seconds (This includes all TensorFlow initialization!)
 - **Parallelization**: 64 vectorized environments
-- **GPU acceleration**: Custom Tensor-accelerated training loop and SumTree impplementation with 5x+ sampling speedup
+- **GPU acceleration**: Custom Tensor-accelerated training loop and SumTree implementation with 5x+ sampling speedup
 - **Throughput**: 10M+ timesteps efficiently processed
 
 ## Technical Architecture
@@ -23,10 +25,10 @@ A heavily optimized Deep Double Q-Network implementation that solves CartPole-v1
 ### GPU-Accelerated Prioritized Replay
 The core innovation is a custom **TensorFlow-native SumTree** implementation for prioritized experience replay:
 
-- **Three-tier optimization**: Pure Python → NumPy vectorized → TensorFlow GPU-accelerated
+- **Three-tier optimization**: Pure Python → NumPy vectorization for building/rebuilding tree → TensorFlow GPU-accelerated parallel tree access
 - **Vectorized tree traversal**: Batch sampling using TensorFlow operations are O(log(n)), 5x faster and scalable
-- **Smart rebuilds**: Partial tree reconstruction to minimize overhead
-- **Memory efficiency**: Float32 precision with strategic memory layouts
+- **Smart rebuilds**: Partial tree reconstruction occurs after a batch-add to minimize overhead
+- **Memory efficiency**: Float32 precision with strategic memory layouts. Indexes are shared across all data tensors 
 
 The SumTree implementation alone represents a significant algorithmic contribution, achieving >5x sampling performance improvements through vectorized TensorFlow operations while maintaining mathematical correctness.
 
@@ -36,8 +38,9 @@ The SumTree implementation alone represents a significant algorithmic contributi
 - **Batched operations**: Actions, rewards, and state transitions processed in parallel on GPU
 
 ### Advanced DQN Implementation
-- **Double DQN**: Separate target networks with soft updates
-- **Custom reward engineering**: Composite angle/position rewards via TensorFlow compilation
+- **Double DQN**: Separate target networks with soft target updates
+- **Epsilon and learning rate decay**: balances exploration and exploitation throughout the learning process
+- **Custom rewards**: Reward varies continuously from 1 to 0 depending on cart angle and position. This provides better gradients than the standard cartpole reward system
 - **Mixed precision**: RTX 3090 optimization with gradient scaling
 - **Gradient clipping**: Huber loss with configurable delta for stability
 
@@ -54,7 +57,7 @@ The SumTree implementation alone represents a significant algorithmic contributi
 
 **Neural Architecture:**
 - Compact 12→12→2 network for minimal computational overhead. Network forward passes and backpropogation run on a custom training loop on GPU
-- Optimized hyperparameters: γ=0.998, τ=0.06, α=0.7. This is extremely aggressive but great for this environment. 
+- Optimized hyperparameters: γ=0.998, τ=0.06, α=0.7. This is extremely aggressive for Q learning generally but works great for this simple environment. 
 
 ## Usage
 
