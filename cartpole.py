@@ -239,8 +239,8 @@ def main():
             custom_rewards, dones = calculate_custom_rewards(next_states[:,0], next_states[:,2], terminations, truncations)
             
             # Store batch of experiences in replay buffer
-            agent.remember_batch(states, actions, custom_rewards, next_states, dones)
-            
+            agent.memory.add(states, actions, custom_rewards, next_states, dones)
+
             # Update metrics for each environment
             env_steps += 1  # Increment steps for all environments
             env_rewards += custom_rewards.numpy()  # Add rewards to running totals
@@ -250,7 +250,9 @@ def main():
             logger.log_metrics(
                 step=total_steps,
                 lr=agent.get_current_learning_rate(),
-                epsilon=agent.epsilon
+                epsilon=agent.epsilon,
+                alpha=agent.alpha,
+                beta=agent.memory.beta,
             )
 
             # Handle episode terminations for each environment
@@ -275,8 +277,8 @@ def main():
             
             # Train periodically 
             if total_steps % agent.train_frequency == 0:
-                loss = agent.replay()
-                logger.log_metrics(step=total_steps, loss=loss)
+                loss, avg_td_error = agent.replay()
+                logger.log_metrics(step=total_steps, loss=loss, avg_td_error=avg_td_error)
 
                 #soft update the target model
                 agent.update_target_model(tau=agent.tau)

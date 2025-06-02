@@ -10,7 +10,7 @@ from collections import deque
 import os
 import random
 
-from TFReplayBuffer import TFReplayBuffer
+from TFPrioritizedReplayBuffer import TFPrioritizedReplayBuffer
 
 class DQNAgent:
     def __init__(self, state_size, action_size, log_dir, initial_model_path=None):
@@ -21,12 +21,12 @@ class DQNAgent:
         
         # Hyperparameters
         self.clipnorm = 2.0                 # gradient clipping. reduce to 1 if gradients explode.
-        self.memory_len = 500_000            # Experience replay buffer
+        self.memory_len = 2**19            # Experience replay buffer
         self.gamma = 0.999                   # Discount factor
         self.epsilon = 1.0                  # Exploration rate
         self.epsilon_min = 0.1             # Minimum exploration probability
         self.epsilon_decay = 0.998            # Exponential decay rate for exploration
-        self.batch_size = 3000              # Size of batches for training
+        self.batch_size = 4096              # Size of batches for training. must be power of 2
         self.learning_rate = .05             # Initial learning rate
         self.learning_rate_decay = .998      # learning rate decay 
         self.epochs = 3
@@ -34,11 +34,25 @@ class DQNAgent:
         self.update_target_frequency = 1000000  # How often to HARD update target network (steps). effectively disabled
         self.tau = 0.05                    # Soft update parameter (happens every training)
 
+        #PERB hyperparameters
+        self.alpha = .6                     # prioritization parameter
+        self.beta_start = .4                     # reduces bias
+        self.beta_end = 1.0                     # reduces bias
+        self.beta_frames = 100_000              # reduces bias
+
         self.train_start = 2* self.batch_size  # Minimum experiences before training
 
-        # create memory object
-        self.memory = TFReplayBuffer(state_size, action_size, buffer_size=self.memory_len)
-        
+        # create memory object. Uses Prioritized replay buffers!
+        self.memory = TFPrioritizedReplayBuffer(
+            state_size=state_size,
+            action_size=action_size, 
+            buffer_size=self.memory_len,
+            alpha=self.alpha,
+            beta_start=self.beta_start,
+            beta_end=self.beta_end,
+            beta_frames=self.beta_frames
+        )        
+
         # learning rate scheduler for adam optimizer
         self.lr_schedule = keras.optimizers.schedules.ExponentialDecay(
             initial_learning_rate=self.learning_rate,
@@ -110,27 +124,6 @@ class DQNAgent:
 
     def get_current_learning_rate(self):
         return self.lr_schedule(self.optimizer_steps).numpy()
-    
-    # Keep the NumPy version for compatibility with single environment training
-    def remember(self, state, action, reward, next_state, done):
-        """Store experience in memory"""
-        self.memory.append((state, action, reward, next_state, done))
-
-    @tf.function
-    def _process_batch(self, states, actions, rewards, next_states, dones):
-        """TF function for any preprocessing needed before memory storage"""
-        states = tf.cast(states, tf.float32)
-        actions = tf.cast(actions, tf.int32)
-        rewards = tf.cast(rewards, tf.float32)
-        next_states = tf.cast(next_states, tf.float32)
-        dones = tf.cast(dones, tf.bool)
-        return states, actions, rewards, next_states, dones
-
-    def remember_batch(self, states, actions, rewards, next_states, dones):
-        """Store batch of experiences in memory - no @tf.function here"""
-        # Process in graph mode, then store in eager mode
-        processed = self._process_batch(states, actions, rewards, next_states, dones)
-        self.memory.add(*processed)
     
     @tf.function
     def get_greedy_actions(self, states_batch):
@@ -228,63 +221,75 @@ class DQNAgent:
         
         return updated_q_values
 
+    # Training happens here
     def replay(self):
-        """Train the network using randomly sampled experiences with vectorized operations"""
+        """Train the network using prioritized experience replay"""
         # Check if we have enough experiences
         if self.memory.current_size < self.train_start:
-            return 0.0 
+            return 0.0, 0.0  # Return both loss and td_error
         
-        # Sample a random batch from memory
-        states, actions, rewards, next_states, dones = self.memory.sample(self.batch_size)
-
+        # Sample with priorities
+        states, actions, rewards, next_states, dones, is_weights, indices = self.memory.sample(self.batch_size)
         # Use TensorFlow to compute target Q-values
         targets = self._compute_targets(states, actions, rewards, next_states, dones)
         
-        # Train the network with optimized batch processing
+        # Train using our optimized function
         total_loss = 0.0
-        td_errors = None
+        total_td_errors = []
+        
         for epoch in range(self.epochs):
-            loss, td_errors = self.train_on_batch_with_td_errors(states, actions, targets)
+            loss, td_errors = self.train_on_batch_with_td_errors(states, actions, targets, is_weights)
             total_loss += loss
+            total_td_errors.append(td_errors)
         
-        avg_loss = total_loss / self.epochs
+        # Get the final TD errors from the last epoch for priority updates
+        final_td_errors = total_td_errors[-1]
         
-        # decay epsilon 
-        if (self.epsilon > self.epsilon_min):
+        # Update priorities in the replay buffer (this happens after EVERY training)
+        import time
+        priority_start = time.time()
+        self.memory.update_priorities(indices, final_td_errors)
+        priority_time = time.time() - priority_start
+        
+        # Log priority update time occasionally
+        if self.optimizer_steps % 10 == 0:
+            print(f"Priority update took: {priority_time*1000:.2f}ms")
+        
+        # Decay epsilon 
+        if self.epsilon > self.epsilon_min:
             self.epsilon *= self.epsilon_decay
-
-        # This decays the learning rate
+        # Decay learning rate
         self.optimizer_steps += 1
-            
-        return avg_loss
+        
+        # Calculate averages
+        avg_loss = total_loss / self.epochs
+        avg_td_error = np.mean([np.mean(td_errors) for td_errors in total_td_errors])
+        
+        return avg_loss.numpy(), avg_td_error
 
     @tf.function
-    def train_on_batch_with_td_errors(self, states, actions, targets):
+    def train_on_batch_with_td_errors(self, states, actions, targets, is_weights):
         """
         Custom training function that returns both loss and TD errors.
-        Replace model.fit() with this to get individual TD errors for PER.
-        
-        Args:
-            states: Input states tensor
-            actions: Actions taken (needed to extract specific TD errors)
-            targets: Target Q-values tensor (full Q-value array)
-        
-        Returns:
-            loss: Scalar loss value
-            td_errors: Tensor of TD errors for each sample
+        Now includes importance sampling weights for PER.
         """
         with tf.GradientTape() as tape:
             # Forward pass
             q_values = self.model(states, training=True)
             
-            # Calculate loss using Huber loss
-            loss = self.model.compiled_loss(targets, q_values)
+            # Calculate element-wise Huber loss
+            huber = tf.keras.losses.Huber(delta=10.0, reduction='none')
+            element_wise_loss = huber(targets, q_values)  # Shape: (batch_size, action_size)
+            
+            # Average over actions, then apply IS weights
+            sample_losses = element_wise_loss  # shape (batch_size,)
+            weighted_loss = tf.reduce_mean(sample_losses * is_weights)
             
             # If using mixed precision, scale the loss
             if hasattr(self.optimizer, 'get_scaled_loss'):
-                scaled_loss = self.optimizer.get_scaled_loss(loss)
+                scaled_loss = self.optimizer.get_scaled_loss(weighted_loss)
             else:
-                scaled_loss = loss
+                scaled_loss = weighted_loss
         
         # Calculate gradients
         gradients = tape.gradient(scaled_loss, self.model.trainable_variables)
@@ -305,10 +310,10 @@ class DQNAgent:
         predicted_q = tf.gather_nd(q_values, action_indices)
         target_q = tf.gather_nd(targets, action_indices)
         
-        # TD errors are the absolute difference
-        td_errors = tf.abs(target_q - predicted_q)
+        # TD errors (not absolute - we'll handle that in update_priorities)
+        td_errors = target_q - predicted_q
         
-        return loss, td_errors
+        return weighted_loss, td_errors
     
     def save_model(self, episode):
         """Save model checkpoint"""

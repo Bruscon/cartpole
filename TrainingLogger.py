@@ -22,6 +22,9 @@ class TrainingLogger:
             'loss', 
             'learning_rate', 
             'epsilon',
+            'alpha',
+            'beta',
+            'avg_td_error',
             'avg_reward',  
             'avg_length'   
         ])
@@ -44,7 +47,10 @@ class TrainingLogger:
             'avg_length': -1,
             'loss': -1,
             'learning_rate': -1,
-            'epsilon': -1
+            'epsilon': -1,
+            'alpha': -1,
+            'beta': -1,
+            'avg_td_error': -1
         }
         
         # Create plot figure and axes
@@ -66,7 +72,7 @@ class TrainingLogger:
         self.training_ax.set_title('Training Metrics')
         self.training_ax.set_xlabel('Step')
         self.training_ax.set_ylabel('Loss / Epsilon')
-        self.training_ax.set_ylim(0, 5)  # For loss and epsilon (0-1)
+        self.training_ax.set_ylim(0, 3)  # For loss and epsilon (0-1)
         
         # Create a second y-axis for learning rate
         self.lr_ax = self.training_ax.twinx()
@@ -91,7 +97,10 @@ class TrainingLogger:
         self.loss_line, = self.training_ax.plot([], [], 'r-', label='Loss')
         self.epsilon_line, = self.training_ax.plot([], [], 'g-', label='Epsilon')
         self.lr_line, = self.lr_ax.plot([], [], 'b-', label='Learning Rate')
-        
+        self.alpha_line, = self.training_ax.plot([], [], 'm-', label='Alpha')
+        self.beta_line, = self.training_ax.plot([], [], 'c-', label='Beta') 
+        self.td_error_line, = self.training_ax.plot([], [], 'orange', label='Avg TD Error')
+
         # Set up legends once
         self.ep_artists = [self.reward_scatter, self.length_scatter, 
                         self.eval_line, self.avg_reward_line, self.avg_length_line]
@@ -100,15 +109,16 @@ class TrainingLogger:
                         f'Avg Length ({self.window_size} ep)']
         self.episode_ax.legend(self.ep_artists, self.ep_labels, loc='upper left')
         
-        all_artists = [self.loss_line, self.epsilon_line, self.lr_line]
-        all_labels = ['Loss', 'Epsilon', 'Learning Rate']
+        all_artists = [self.loss_line, self.epsilon_line, self.lr_line, 
+                       self.alpha_line, self.beta_line, self.td_error_line]
+        all_labels = ['Loss', 'Epsilon', 'Learning Rate', 'Alpha', 'Beta', 'Avg TD Error']
         self.training_ax.legend(all_artists, all_labels, loc='upper left')
         
         # Show the plot
         plt.tight_layout()
         plt.show(block=False)
     
-    def log_metrics(self, step, reward=None, length=None, eval_reward=None, loss=None, lr=None, epsilon=None):
+    def log_metrics(self, step, reward=None, length=None, eval_reward=None, loss=None, lr=None, epsilon=None, alpha=None, beta=None, avg_td_error=None):
         """Log all metrics at once for a given step"""
         # If an episode was completed, update rolling averages
         if reward is not None:
@@ -128,6 +138,9 @@ class TrainingLogger:
             'loss': loss, 
             'learning_rate': lr, 
             'epsilon': epsilon,
+            'alpha': alpha,
+            'beta': beta,
+            'avg_td_error': avg_td_error,
             'avg_reward': avg_reward if not np.isnan(avg_reward) else None,
             'avg_length': avg_length if not np.isnan(avg_length) else None
         }
@@ -214,6 +227,27 @@ class TrainingLogger:
         if not lr_data.empty and lr_data.index.max() > self.last_plotted_indices['learning_rate']:
             self.lr_line.set_data(lr_data.index, lr_data.values)
             self.last_plotted_indices['learning_rate'] = lr_data.index.max()
+            changed = True
+
+        # Alpha line
+        alpha_data = self.data['alpha'].dropna()
+        if not alpha_data.empty and alpha_data.index.max() > self.last_plotted_indices['alpha']:
+            self.alpha_line.set_data(alpha_data.index, alpha_data.values)
+            self.last_plotted_indices['alpha'] = alpha_data.index.max()
+            changed = True
+
+        # Beta line
+        beta_data = self.data['beta'].dropna()
+        if not beta_data.empty and beta_data.index.max() > self.last_plotted_indices['beta']:
+            self.beta_line.set_data(beta_data.index, beta_data.values)
+            self.last_plotted_indices['beta'] = beta_data.index.max()
+            changed = True
+
+        # Average TD Error line
+        td_error_data = self.data['avg_td_error'].dropna()
+        if not td_error_data.empty and td_error_data.index.max() > self.last_plotted_indices['avg_td_error']:
+            self.td_error_line.set_data(td_error_data.index, td_error_data.values)
+            self.last_plotted_indices['avg_td_error'] = td_error_data.index.max()
             changed = True
         
         # Only update limits and redraw if something changed
