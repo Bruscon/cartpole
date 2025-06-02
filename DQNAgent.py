@@ -21,24 +21,24 @@ class DQNAgent:
         
         # Hyperparameters
         self.clipnorm = 2.0                 # gradient clipping. reduce to 1 if gradients explode.
-        self.memory_len = 2**19            # Experience replay buffer
-        self.gamma = 0.999                   # Discount factor
+        self.memory_len = 2**17            # Experience replay buffer
+        self.gamma = 0.998                   # Discount factor
         self.epsilon = 1.0                  # Exploration rate
         self.epsilon_min = 0.1             # Minimum exploration probability
         self.epsilon_decay = 0.998            # Exponential decay rate for exploration
-        self.batch_size = 4096              # Size of batches for training. must be power of 2
+        self.batch_size = 1024              # Size of batches for training. must be power of 2
         self.learning_rate = .05             # Initial learning rate
         self.learning_rate_decay = .998      # learning rate decay 
         self.epochs = 3
         self.train_frequency = 1           # How many time steps between training runs
         self.update_target_frequency = 1000000  # How often to HARD update target network (steps). effectively disabled
-        self.tau = 0.05                    # Soft update parameter (happens every training)
+        self.tau = 0.06                    # Soft update parameter (happens every training)
 
         #PERB hyperparameters
-        self.alpha = .6                     # prioritization parameter
-        self.beta_start = .4                     # reduces bias
+        self.alpha = .7                     # prioritization parameter
+        self.beta_start = .3                     # reduces bias
         self.beta_end = 1.0                     # reduces bias
-        self.beta_frames = 100_000              # reduces bias
+        self.beta_frames = 50_000              # reduces bias
 
         self.train_start = 2* self.batch_size  # Minimum experiences before training
 
