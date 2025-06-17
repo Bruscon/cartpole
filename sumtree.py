@@ -415,13 +415,13 @@ class TFSumTree:
        # Sync numpy data to TensorFlow
        self._sync_to_tensorflow()
        
-       # Convert to tensor and clamp
+       # Convert to tensor and clamp. This part takes the most time. 
        cumsums = tf.constant(cumsums, dtype=tf.float32)
        total = self.total
        safe_cumsums = tf.minimum(cumsums, total - 1e-7)
        safe_cumsums = tf.maximum(safe_cumsums, 0.0)
        
-       # Use TensorFlow for vectorized sampling
+       # Use TensorFlow for vectorized sampling. very fast. 
        return self._vectorized_get(safe_cumsums, self._tf_nodes, self._tf_data)
    
    def single_add(self, priority, data_value):

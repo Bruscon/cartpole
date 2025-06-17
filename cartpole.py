@@ -263,8 +263,7 @@ def main():
 	# Main training loop - run for a fixed number of steps
 	states, _ = envs.reset(seed=42)
 
-	pr = cProfile.Profile()
-	pr.enable()
+
 
 	while total_steps < TOTAL_TIMESTEPS:
 		# Get actions from forward pass on NN
@@ -379,7 +378,13 @@ def main():
 			save=(total_steps % SAVE_FREQUENCY == 0)
 		)
 
-		if total_steps == 100: 
+
+
+		if total_steps == 5: 
+			pr = cProfile.Profile()
+			pr.enable()
+
+		if total_steps % 100 == 0: 
 			pr.disable()
 			profile_path = os.path.join(log_dir, 'main_loop_profile.prof')
 			pr.dump_stats(profile_path)
@@ -406,6 +411,7 @@ def main():
 				for func in matching_funcs:
 					print(f"\nCallees of {func[2]}:")
 					stats.sort_stats('cumtime').print_callees(func[2], 10)
+			pr.enable()
 
 		
 

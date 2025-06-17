@@ -72,7 +72,7 @@ class TrainingLogger:
         self.training_ax.set_title('Training Metrics')
         self.training_ax.set_xlabel('Step')
         self.training_ax.set_ylabel('Loss / Epsilon')
-        self.training_ax.set_ylim(0, 3)  # For loss and epsilon (0-1)
+        self.training_ax.set_ylim(-1, 2)  # For loss and epsilon (0-1)
         
         # Create a second y-axis for learning rate
         self.lr_ax = self.training_ax.twinx()
