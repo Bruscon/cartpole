@@ -99,24 +99,31 @@ class TFPrioritizedReplayBuffer:
         """
         batch_size = tf.shape(states_batch)[0].numpy()
         
-        # Calculate indices for this batch - simple slice assignment
         start_idx = self.current_idx
-        end_idx = start_idx + batch_size
-        
-        # Assign experiences to buffer (no wraparound needed with our constraints)
-        idx_slice = slice(start_idx, end_idx)
-        self.states[idx_slice].assign(states_batch)
-        self.actions[idx_slice].assign(actions_batch)
-        self.rewards[idx_slice].assign(rewards_batch)
-        self.next_states[idx_slice].assign(next_states_batch)
-        self.dones[idx_slice].assign(dones_batch)
-        
-        # Assign max priority to new experiences
+        first_chunk = min(batch_size, self.buffer_size - start_idx)
+        second_chunk = batch_size - first_chunk
+
+        self.states[start_idx:start_idx + first_chunk].assign(states_batch[:first_chunk])
+        self.actions[start_idx:start_idx + first_chunk].assign(actions_batch[:first_chunk])
+        self.rewards[start_idx:start_idx + first_chunk].assign(rewards_batch[:first_chunk])
+        self.next_states[start_idx:start_idx + first_chunk].assign(next_states_batch[:first_chunk])
+        self.dones[start_idx:start_idx + first_chunk].assign(dones_batch[:first_chunk])
+
         new_priorities = np.full(batch_size, self.max_priority ** self.alpha, dtype=np.float32)
-        
-        # Update priorities in sumtree
-        self.sumtree.priorities[start_idx:end_idx] = new_priorities
-        self.sumtree.rebuild_tree(start_leaf=start_idx, end_leaf=end_idx)
+        self.sumtree.priorities[start_idx:start_idx + first_chunk] = new_priorities[:first_chunk]
+        rebuild_ranges = [(start_idx, start_idx + first_chunk)]
+
+        if second_chunk > 0:
+            self.states[:second_chunk].assign(states_batch[first_chunk:])
+            self.actions[:second_chunk].assign(actions_batch[first_chunk:])
+            self.rewards[:second_chunk].assign(rewards_batch[first_chunk:])
+            self.next_states[:second_chunk].assign(next_states_batch[first_chunk:])
+            self.dones[:second_chunk].assign(dones_batch[first_chunk:])
+            self.sumtree.priorities[:second_chunk] = new_priorities[first_chunk:]
+            rebuild_ranges.append((0, second_chunk))
+
+        for rebuild_start, rebuild_end in rebuild_ranges:
+            self.sumtree.rebuild_tree(start_leaf=rebuild_start, end_leaf=rebuild_end)
         
         # Update buffer state
         self.current_idx = (self.current_idx + batch_size) % self.buffer_size
