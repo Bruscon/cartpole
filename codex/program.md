@@ -18,7 +18,7 @@ The goal: converge to perfect CartPole scores as fast as possible (fewest traini
 - Eval runs **5 episodes per checkpoint**, reports the **average score**
 - Convergence = rolling average of last **10 eval checkpoints ≥ 475** (each checkpoint is already a 5-episode mean)
 - Metric: **training steps to convergence** (fewer = better)
-- A run that never converges within 300s wall-clock = DNF
+- A run that never converges within 180s wall-clock = DNF
 - **5 runs per experiment**. Report: how many converged, average convergence step for those that did
 
 ## Experiment Spec Format
@@ -123,7 +123,7 @@ Columns: `experiment | description | converged | avg_step | run_details | status
 Claude spawns **5 parallel subagents**, each running one training session.
 Each subagent should:
 1. Activate venv: `source /home/nick/rl-env/bin/activate`
-2. Run `python cartpole.py --max-seconds 300` from the project root (use a unique `--log-dir /tmp/expN_runM`)
+2. Run `python cartpole.py --max-seconds 180` from the project root (use a unique `--log-dir /tmp/expN_runM`)
 3. Parse stdout JSON for eval scores
 4. Compute: did the 5-episode-avg rolling-10 criterion get met? At what step?
 5. Return: convergence step (or "DNF"), brief score trajectory summary

@@ -26,7 +26,7 @@ Follow the Codex orchestration pattern from your memory (`codex_orchestration.md
 
 - **Metric**: training steps to convergence. Fewer = better.
 - **Convergence**: rolling avg of last 10 eval checkpoints ≥ 475 (each checkpoint = 5 episodes averaged)
-- **Time budget**: 300 seconds per training run (`--max-seconds 300`)
+- **Time budget**: 180 seconds per training run (`--max-seconds 180`)
 - **Runs per experiment**: 5 parallel runs
 - **Results file**: `codex/results.tsv` — append every experiment, never overwrite
 - **Git**: every experiment on a branch. Merge with `--no-ff`. Revert failures on master.
@@ -63,7 +63,7 @@ Be specific enough that Codex can implement without asking questions. Reference 
 Do NOT run `python cartpole.py` directly in your main context — the output is too verbose.
 Spawn **5 parallel general-purpose subagents**, each running one training session.
 Each subagent should:
-1. Run `source /home/nick/rl-env/bin/activate && cd /home/nick/Documents/cartpole && python cartpole.py --max-seconds 300 --log-dir /tmp/<exp>_run<N>`
+1. Run `source /home/nick/rl-env/bin/activate && cd /home/nick/Documents/cartpole && python cartpole.py --max-seconds 180 --log-dir /tmp/<exp>_run<N>`
 2. Parse stdout JSON for eval scores
 3. Determine if/when convergence criterion was met
 4. Return: convergence step (or "DNF"), brief score trajectory, any errors
