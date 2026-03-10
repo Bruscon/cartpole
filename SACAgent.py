@@ -1,7 +1,7 @@
 import numpy as np
 import tensorflow as tf
-from tensorflow.keras.models import Sequential, clone_model
-from tensorflow.keras.layers import Dense, Input
+from tensorflow.keras.models import Model, Sequential, clone_model
+from tensorflow.keras.layers import Activation, Dense, Input, Lambda, LayerNormalization
 from tensorflow.keras.optimizers import Adam
 from tensorflow.keras.losses import Huber
 from tensorflow.keras.callbacks import TensorBoard
@@ -24,7 +24,7 @@ class SACAgent:
         self.memory_len = 2**17             # Experience replay buffer
         self.gamma = 0.999                  # Discount factor
         self.batch_size = 256               # Size of batches for training
-        self.learning_rate = 0.01          # Initial learning rate
+        self.learning_rate = 0.03          # Initial learning rate
         self.learning_rate_decay = 0.999    # learning rate decay
         self.epochs = 3                     # number of training loops per step
         self.train_frequency = 1            # How many time steps between training runs
@@ -86,21 +86,34 @@ class SACAgent:
         self.update_target_models(tau=1.0)
         
     def _build_q_model(self):
-        """Q-Network architecture (same as DQN)"""
-        model = Sequential([
-            Input(shape=(self.state_size,)),
-            Dense(64, activation='relu'),
-            Dense(64, activation='relu'),
-            Dense(self.action_size, activation='linear')
-        ])
+        """Dueling Q-Network architecture"""
+        inputs = Input(shape=(self.state_size,))
+        x = Dense(64, activation=None)(inputs)
+        x = LayerNormalization()(x)
+        x = Activation('relu')(x)
+        x = Dense(64, activation=None)(x)
+        x = LayerNormalization()(x)
+        x = Activation('relu')(x)
+
+        value = Dense(1, activation='linear')(x)
+        advantage = Dense(self.action_size, activation='linear')(x)
+        q_values = Lambda(
+            lambda va: va[0] + va[1] - tf.reduce_mean(va[1], axis=1, keepdims=True)
+        )([value, advantage])
+
+        model = Model(inputs=inputs, outputs=q_values)
         return model
     
     def _build_policy_model(self):
         """Policy Network for discrete actions"""
         model = Sequential([
             Input(shape=(self.state_size,)),
-            Dense(64, activation='relu'),
-            Dense(64, activation='relu'),
+            Dense(64, activation=None),
+            LayerNormalization(),
+            Activation('relu'),
+            Dense(64, activation=None),
+            LayerNormalization(),
+            Activation('relu'),
             Dense(self.action_size, activation='linear')  # Logits, not softmax
         ])
         return model
