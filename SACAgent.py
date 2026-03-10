@@ -233,7 +233,7 @@ class SACAgent:
             q1_selected = tf.gather_nd(q1_values, action_indices)
             
             # Huber loss with importance weights
-            huber = tf.keras.losses.Huber(delta=10.0, reduction='none')
+            huber = tf.keras.losses.Huber(delta=1.0, reduction='none')
             q1_loss = huber(targets, q1_selected)
             q1_loss = tf.reduce_mean(q1_loss * is_weights)
             
