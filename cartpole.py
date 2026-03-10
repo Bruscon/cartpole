@@ -136,6 +136,8 @@ def main():
     training_start_time = time.time()
     evaluation_pending = False
     last_eval_step = 0
+    eval_scores = []  # Track eval scores for rolling convergence check
+    convergence_step = None  # Step at which convergence criterion was met
 
     parent_conn, child_conn = Pipe()
     os.makedirs(os.path.join(log_dir, "eval_models"), exist_ok=True)
@@ -239,12 +241,20 @@ def main():
                     else:
                         eval_step, eval_score, eval_reward = eval_result
                         logger.log_metrics(step=eval_step, eval_reward=eval_reward * eval_score)
+                        eval_scores.append(eval_score)
+                        # Check rolling convergence: last 10 eval checkpoints avg >= 475
+                        rolling_avg = np.mean(eval_scores[-10:]) if len(eval_scores) >= 10 else 0.0
                         record = {
                             "type": "eval",
                             "step": int(eval_step),
-                            "score": int(eval_score),
+                            "score": round(float(eval_score), 1),
                             "reward": round(float(eval_reward * eval_score), 4),
+                            "rolling_avg": round(float(rolling_avg), 1),
                         }
+                        if convergence_step is None and len(eval_scores) >= 10 and rolling_avg >= 475:
+                            convergence_step = int(eval_step)
+                            record["converged"] = True
+                            record["convergence_step"] = convergence_step
                         emit(record)
                         logger.log_json(record)
                     evaluation_pending = False
@@ -263,7 +273,10 @@ def main():
             )
 
         agent.save_model(completed_episodes)
-        emit({"type": "done", "step": int(total_steps), "episodes": int(completed_episodes)})
+        done_record = {"type": "done", "step": int(total_steps), "episodes": int(completed_episodes)}
+        if convergence_step is not None:
+            done_record["convergence_step"] = convergence_step
+        emit(done_record)
         logger.update_plot(save=True)
         logger.save_data()
 
