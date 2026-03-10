@@ -14,6 +14,7 @@ import shutil
 import json
 import argparse
 import subprocess
+from collections import deque
 from multiprocessing.connection import Pipe
 
 from SACAgent import SACAgent
@@ -120,7 +121,17 @@ def main():
     envs = TFWrappedVecEnv(gym_envs)
 
     agent = SACAgent(state_size, action_size, log_dir, INITIAL_MODEL_PATH)
+    n_step_buffers = [deque() for _ in range(n_envs)]
     logger = TrainingLogger(log_dir, window_size=25)
+
+    def build_n_step_transition(transition_buffer):
+        n_step_return = 0.0
+        for _, _, reward, _, _ in reversed(transition_buffer):
+            n_step_return = float(reward) + agent.gamma * n_step_return
+
+        state_0, action_0, _, _, _ = transition_buffer[0]
+        _, _, _, state_n, done_n = transition_buffer[-1]
+        return state_0, action_0, n_step_return, state_n, done_n
 
     TOTAL_TIMESTEPS = 10_000_000
     EVAL_FREQUENCY = 10
@@ -174,7 +185,55 @@ def main():
                 next_states[:, 0], next_states[:, 2], terminations, truncations
             )
 
-            agent.memory.add(states, actions, custom_rewards, next_states, dones)
+            states_np = states.numpy()
+            actions_np = actions.numpy()
+            rewards_np = custom_rewards.numpy()
+            next_states_np = next_states.numpy()
+            dones_np = dones.numpy()
+
+            batch_states = []
+            batch_actions = []
+            batch_rewards = []
+            batch_next_states = []
+            batch_dones = []
+
+            for i in range(n_envs):
+                transition_buffer = n_step_buffers[i]
+                transition_buffer.append((
+                    states_np[i],
+                    actions_np[i],
+                    rewards_np[i],
+                    next_states_np[i],
+                    dones_np[i],
+                ))
+
+                if len(transition_buffer) == agent.n_step:
+                    state_0, action_0, n_step_return, state_n, done_n = build_n_step_transition(transition_buffer)
+                    batch_states.append(state_0)
+                    batch_actions.append(action_0)
+                    batch_rewards.append(n_step_return)
+                    batch_next_states.append(state_n)
+                    batch_dones.append(done_n)
+                    transition_buffer.popleft()
+
+                if dones_np[i]:
+                    while transition_buffer:
+                        state_0, action_0, n_step_return, state_n, done_n = build_n_step_transition(transition_buffer)
+                        batch_states.append(state_0)
+                        batch_actions.append(action_0)
+                        batch_rewards.append(n_step_return)
+                        batch_next_states.append(state_n)
+                        batch_dones.append(done_n)
+                        transition_buffer.popleft()
+
+            if batch_states:
+                agent.memory.add(
+                    tf.convert_to_tensor(np.asarray(batch_states), dtype=tf.float32),
+                    tf.convert_to_tensor(np.asarray(batch_actions), dtype=tf.int32),
+                    tf.convert_to_tensor(np.asarray(batch_rewards), dtype=tf.float32),
+                    tf.convert_to_tensor(np.asarray(batch_next_states), dtype=tf.float32),
+                    tf.convert_to_tensor(np.asarray(batch_dones), dtype=tf.bool),
+                )
 
             env_steps += 1
             env_rewards += custom_rewards.numpy()
