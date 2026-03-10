@@ -31,7 +31,6 @@ class SACAgent:
         self.clipnorm = 2.0                 # gradient clipping
         self.memory_len = 2**17             # Experience replay buffer
         self.gamma = 0.999                  # Discount factor
-        self.n_step = 2                     # Multi-step return horizon
         self.batch_size = 256               # Size of batches for training
         self.learning_rate = 0.03          # Initial learning rate
         self.learning_rate_decay = 0.999    # learning rate decay
@@ -212,7 +211,7 @@ class SACAgent:
         
         # Compute targets
         dones_float = tf.cast(dones, tf.float32)
-        targets = rewards + (1.0 - dones_float) * (self.gamma ** self.n_step) * next_values
+        targets = rewards + (1.0 - dones_float) * self.gamma * next_values
         
         return targets
     
