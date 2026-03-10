@@ -1,46 +1,137 @@
 # CartPole Autoresearch Loop
 
-Inspired by Karpathy's autoresearch pattern but with Claude as the strategist.
+An automated RL research loop. Claude is the strategist. Codex is the implementer.
+The goal: converge to perfect CartPole scores as fast as possible (fewest training steps).
 
 ## The Loop
 
-1. **Claude proposes** a change (reward shaping, hyperparams, training tricks — NOT major architecture or library changes)
-2. **Codex implements** it via the standard orchestration pattern (TASK.md → worktree → review → merge)
-3. **3 parallel Claude subagents** each run `python cartpole.py --max-seconds 300`, extract the convergence metric, return a one-paragraph summary
-4. **Claude decides** keep or revert based on the 3 summaries, logs to `codex/results.tsv`
-5. Repeat with next hypothesis
+1. **Claude proposes** an experiment — a structured spec describing what to change, why, and what to measure
+2. **Codex implements** it in a git branch (branch per experiment, always)
+3. **Claude reviews** the diff before merging to master
+4. **5 parallel training runs** measure the result (RL has high variance)
+5. **Claude decides**: keep (merge stays) or revert (`git revert` the merge commit)
+6. **Claude logs** results and lessons learned to `codex/results.tsv`
+7. Repeat with next hypothesis, informed by all previous results
 
-## Convergence Criterion ("better")
-- Rolling average of last **10 evaluation runs ≥ 450**
-- Metric tracked: **timesteps to convergence** (fewer = better)
-- A run that never hits 450/10 within 300s = failure
+## Convergence Criterion
+
+- Eval runs **5 episodes per checkpoint**, reports the **average score**
+- Convergence = rolling average of last **10 eval checkpoints ≥ 475** (each checkpoint is already a 5-episode mean)
+- Metric: **training steps to convergence** (fewer = better)
+- A run that never converges within 300s wall-clock = DNF
+- **5 runs per experiment**. Report: how many converged, average convergence step for those that did
+
+## Experiment Spec Format
+
+When proposing an experiment, Claude writes a spec like this:
+
+```
+## Experiment: <name>
+### Hypothesis
+<What you expect to happen and why — ground it in RL theory>
+
+### Changes
+<Bullet list of concrete code changes. Be specific enough that Codex can implement without ambiguity.>
+
+### Expected mechanism
+<Why should this help? What's the causal chain?>
+
+### Rollback plan
+<What to revert if it fails — usually just "git revert the merge commit">
+```
+
+Claude writes this spec to `codex/TASK.md`. Codex reads it and implements.
+
+## What Claude Can Propose
+
+**Anything that might help convergence speed.** This includes:
+
+### Architecture
+- Network topology (dueling heads, noisy layers, skip connections, attention)
+- Activation functions (ReLU, GELU, Swish, etc.)
+- Layer normalization, batch normalization
+- Separate network sizes for different components
+
+### Algorithm
+- N-step returns
+- Distributional RL (C51, QR-DQN)
+- Different SAC variants
+- Double Q-learning variants
+- Switching between SAC and DQN (both exist in codebase)
+- Mixing algorithms (e.g., SAC with distributional critics)
+
+### Training
+- Learning rate schedules (cosine, warmup+decay, cyclical)
+- Replay buffer variants (uniform, PER tuning, hindsight)
+- Training frequency, gradient steps per env step
+- Batch size, buffer size
+- Target network update strategies
+
+### Reward Shaping
+- Any function of the 4 state variables (cart_pos, cart_vel, pole_angle, pole_angular_vel)
+- Reward clipping, normalization, scaling
+- Potential-based shaping
+
+### Exploration
+- Entropy bonuses (SAC temperature tuning)
+- Noisy networks
+- Epsilon schedules
+- Boltzmann exploration
+
+### Dependencies
+- **pip install is allowed**. If a library helps (e.g., `tensorflow-probability`, `gymnasium[classic_control]`, etc.), Codex can install it
+- Add new deps to requirements.txt
+
+## What Claude Cannot Change
+- The orchestration files in `codex/` (program.md, results tracking)
+- The fundamental eval metric (score = steps survived in CartPole-v1, max 500)
+
+## Multi-Change Experiments
+
+Claude is encouraged to propose **compound changes** when there's theoretical reason to believe they interact. Examples:
+- "Layer norm enables higher learning rates" → change both together
+- "Dueling architecture + n-step returns" → known to be complementary (Rainbow)
+- "Smaller network + noisy layers" → trade capacity for better exploration
+
+Single-variable experiments are fine for isolating effects, but don't be afraid to propose bigger moves.
+
+## Git Discipline
+
+**Every experiment gets a branch.** This is non-negotiable.
+
+1. Codex creates branch `exp/<name>` from master
+2. Codex commits changes on that branch
+3. Codex merges to master with a merge commit (not fast-forward: `--no-ff`)
+4. If the experiment fails: `git revert <merge-commit>` on master
+5. The experiment branch stays forever — it's our research history
+
+This means we can always `git log --oneline --graph` and see every experiment tried.
 
 ## Results Tracking
+
 File: `codex/results.tsv`
-Columns: `experiment | description | run1_timesteps | run2_timesteps | run3_timesteps | avg | status | notes`
-Status: `keep` or `revert`
+Columns: `experiment | description | converged | avg_step | run_details | status | lesson`
 
-## Scope of Changes Claude Can Propose
-- Reward shaping (the custom angle × position formula)
-- Hyperparameters (lr, gamma, tau, batch size, epsilon schedule, etc.)
-- Replay buffer parameters (alpha, beta, buffer size)
-- Training loop tweaks (train frequency, target update frequency)
-- Network size/activation (small changes, not wholesale rewrites)
-- Exploration strategy
+- `converged`: "3/5", "5/5", etc.
+- `avg_step`: average convergence step for runs that converged (DNF if 0/5)
+- `run_details`: per-run convergence steps, comma-separated
+- `status`: `keep` or `revert`
+- `lesson`: 1-2 sentence takeaway that informs future experiments
 
-## Out of Scope
-- Switching RL algorithm (SAC ↔ DQN is ok, but not new libraries)
-- Major architecture overhauls
-- Changing the evaluation infrastructure
+## Running Training
 
-## Subagent Pattern for Running Training
-Spawn 3 parallel general-purpose subagents, each with a prompt like:
-"Run `python cartpole.py --max-seconds 300` in the project root.
-Monitor stdout. Report: did rolling avg hit 450 over 10 evals? If yes, at what timestep?
-What was the score trajectory (every ~30s)? Any errors? Return a short summary only."
-
-This protects orchestrator context from verbose training output.
+Claude spawns **5 parallel subagents**, each running one training session.
+Each subagent should:
+1. Activate venv: `source /home/nick/rl-env/bin/activate`
+2. Run `python cartpole.py --max-seconds 300` from the project root (use a unique `--log-dir /tmp/expN_runM`)
+3. Parse stdout JSON for eval scores
+4. Compute: did the 5-episode-avg rolling-10 criterion get met? At what step?
+5. Return: convergence step (or "DNF"), brief score trajectory summary
 
 ## Baseline
-First experiment is always a baseline (no code changes, just 3 runs) to establish
-the current timesteps-to-convergence before any modifications.
+
+Current baseline (after hyperparameter tuning): **3/3 converge, avg step 890**
+Config: policy net 64-64, tau=0.1, batch_size=256, gamma=0.999
+
+The first experiment in a new session should re-establish baseline if the code has changed,
+or skip straight to proposing improvements if results.tsv shows a recent baseline.
