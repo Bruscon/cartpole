@@ -98,7 +98,8 @@ class SACAgent:
         value = Dense(1, activation='linear')(x)
         advantage = Dense(self.action_size, activation='linear')(x)
         q_values = Lambda(
-            lambda va: va[0] + va[1] - tf.reduce_mean(va[1], axis=1, keepdims=True)
+            lambda va: va[0] + va[1] - tf.reduce_mean(va[1], axis=1, keepdims=True),
+            output_shape=(self.action_size,)
         )([value, advantage])
 
         model = Model(inputs=inputs, outputs=q_values)
