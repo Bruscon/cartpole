@@ -96,10 +96,10 @@ class SACAgent:
     def _build_q_model(self):
         """Dueling Q-Network architecture"""
         inputs = Input(shape=(self.state_size,))
-        x = Dense(64, activation=None)(inputs)
+        x = Dense(128, activation=None)(inputs)
         x = LayerNormalization()(x)
         x = Activation('relu')(x)
-        x = Dense(64, activation=None)(x)
+        x = Dense(128, activation=None)(x)
         x = LayerNormalization()(x)
         x = Activation('relu')(x)
 
@@ -114,10 +114,10 @@ class SACAgent:
         """Policy Network for discrete actions"""
         model = Sequential([
             Input(shape=(self.state_size,)),
-            Dense(64, activation=None),
+            Dense(128, activation=None),
             LayerNormalization(),
             Activation('relu'),
-            Dense(64, activation=None),
+            Dense(128, activation=None),
             LayerNormalization(),
             Activation('relu'),
             Dense(self.action_size, activation='linear')  # Logits, not softmax
