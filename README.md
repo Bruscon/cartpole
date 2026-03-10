@@ -1,8 +1,6 @@
-# Two AIs Walked Into a Lab
+# Agentic Auto-research for an RL experiment
 
-One was the scientist. The other was the coder. I just watched.
-
-I'd already spent months tuning this CartPole agent by hand. I thought it was optimal. Then I gave the codebase to Claude (strategist) and Codex (implementer) and told them to make it learn faster. They ran 36 experiments on their own. No human touched the code. No human picked the hyperparameters.
+Years ago, I made this CartPole agent and tuned it by hand. I thought it was optimal. Then I gave the codebase to Claude (strategist) and Codex (implementer) and told them to make it learn faster. They ran 36 experiments on their own. No human touched the code. No human picked the hyperparameters.
 
 They took my "optimal" agent and made it converge 3x faster, then made it perfectly reliable on a harder eval that my version couldn't even pass.
 
