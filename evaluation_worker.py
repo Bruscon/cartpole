@@ -92,8 +92,17 @@ def main():
 
             try:
                 saved_model = tf.keras.models.load_model(model_path)
-                eval_score, eval_reward = run_evaluation_episode(saved_model, eval_env, state_size)
-                conn.send((total_steps, eval_score, eval_reward))
+                # Run 5 episodes per checkpoint for reduced noise
+                n_eval_episodes = 5
+                scores = []
+                rewards = []
+                for _ in range(n_eval_episodes):
+                    ep_score, ep_reward = run_evaluation_episode(saved_model, eval_env, state_size)
+                    scores.append(ep_score)
+                    rewards.append(ep_reward)
+                avg_score = np.mean(scores)
+                avg_reward = np.mean(rewards)
+                conn.send((total_steps, avg_score, avg_reward))
             except Exception as e:
                 conn.send(("ERROR", f"Model loading/evaluation failed: {str(e)}"))
 
