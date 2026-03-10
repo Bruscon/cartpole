@@ -34,6 +34,8 @@ if gpus:
 parser = argparse.ArgumentParser(description='SAC training for CartPole')
 parser.add_argument('--log-dir', type=str, help='Directory for logs')
 parser.add_argument('--model', type=str, help='Path to initial model')
+parser.add_argument('--max-seconds', type=float, default=None,
+                    help='Maximum wall-clock training time in seconds')
 parser.add_argument('--graphics', action='store_true', default=False,
                     help='Whether evaluation episodes should be rendered graphically')
 args = parser.parse_args()
@@ -156,9 +158,13 @@ def main():
           "total_timesteps": TOTAL_TIMESTEPS, "agent": "SAC"})
 
     states, _ = envs.reset(seed=42)
+    deadline = time.monotonic() + args.max_seconds if args.max_seconds is not None else None
 
     try:
         while total_steps < TOTAL_TIMESTEPS:
+            if deadline is not None and time.monotonic() >= deadline:
+                break
+
             actions = agent.get_actions(states)
 
             next_states, rewards, terminations, truncations, infos = envs.step(actions)
