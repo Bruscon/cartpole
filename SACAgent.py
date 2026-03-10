@@ -1,7 +1,7 @@
 import numpy as np
 import tensorflow as tf
 from tensorflow.keras.models import Sequential, clone_model
-from tensorflow.keras.layers import Activation, Dense, Input, LayerNormalization
+from tensorflow.keras.layers import Dense, Input
 from tensorflow.keras.optimizers import Adam
 from tensorflow.keras.losses import Huber
 from tensorflow.keras.callbacks import TensorBoard
@@ -24,7 +24,7 @@ class SACAgent:
         self.memory_len = 2**17             # Experience replay buffer
         self.gamma = 0.999                  # Discount factor
         self.batch_size = 256               # Size of batches for training
-        self.learning_rate = 0.03          # Initial learning rate
+        self.learning_rate = 0.01          # Initial learning rate
         self.learning_rate_decay = 0.999    # learning rate decay
         self.epochs = 3                     # number of training loops per step
         self.train_frequency = 1            # How many time steps between training runs
@@ -89,12 +89,8 @@ class SACAgent:
         """Q-Network architecture (same as DQN)"""
         model = Sequential([
             Input(shape=(self.state_size,)),
-            Dense(64, activation=None),
-            LayerNormalization(),
-            Activation('relu'),
-            Dense(64, activation=None),
-            LayerNormalization(),
-            Activation('relu'),
+            Dense(64, activation='relu'),
+            Dense(64, activation='relu'),
             Dense(self.action_size, activation='linear')
         ])
         return model
@@ -103,12 +99,8 @@ class SACAgent:
         """Policy Network for discrete actions"""
         model = Sequential([
             Input(shape=(self.state_size,)),
-            Dense(64, activation=None),
-            LayerNormalization(),
-            Activation('relu'),
-            Dense(64, activation=None),
-            LayerNormalization(),
-            Activation('relu'),
+            Dense(64, activation='relu'),
+            Dense(64, activation='relu'),
             Dense(self.action_size, activation='linear')  # Logits, not softmax
         ])
         return model
