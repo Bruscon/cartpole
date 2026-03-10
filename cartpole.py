@@ -1,417 +1,288 @@
+import os
+os.environ['TF_CPP_MIN_LOG_LEVEL'] = '3'
+os.environ['TF_ENABLE_ONEDNN_OPTS'] = '0'
+
 import gymnasium as gym
 import numpy as np
 import tensorflow as tf
-from tensorflow.keras.models import Sequential, clone_model
-from tensorflow.keras.layers import Dense, Input
-from tensorflow.keras.optimizers import Adam
-from tensorflow.keras.losses import Huber
+tf.get_logger().setLevel('ERROR')
+
 from tensorflow import keras
-from collections import deque
-import random
 import time
-import os, sys
+import sys
 import shutil
-from gymnasium import spaces
-from gymnasium.core import ObservationWrapper
+import json
 import argparse
-import cProfile
-import pstats
 import subprocess
 from multiprocessing.connection import Pipe
-from pathlib import Path
 
-#from DQNAgent import DQNAgent
 from SACAgent import SACAgent
 from TrainingLogger import TrainingLogger
-# from evaluation_worker import evaluation_worker_main
-
-verbose = 1
-
-# Suppress TensorFlow warnings
-#tf.compat.v1.logging.set_verbosity(tf.compat.v1.logging.ERROR)
-
-# #use mixed precision 
-# policy = tf.keras.mixed_precision.Policy('mixed_float16')
-# tf.keras.mixed_precision.set_global_policy(policy)
-
-#allows GPU memory to be allocated as needed
-tf.config.experimental.set_memory_growth(tf.config.list_physical_devices('GPU')[0], True)
 
 MAX_ANGLE = 0.2095  # Maximum angle before termination (in radians)
 MAX_POSITION = 2.4  # Maximum cart position
 
-# Make sure we're using my beast of a GPU (NVIDIA RTX 3090 with 24GB of VRAM)
-if verbose > 1:
-	print("TensorFlow version:", tf.__version__)
-	print("GPU Available:", tf.config.list_physical_devices('GPU'))
-	print("Using GPU:", tf.config.list_physical_devices('GPU'))
-	print("CUDA built:", tf.test.is_built_with_cuda())
+# Allow GPU memory growth to avoid allocating all VRAM upfront
+gpus = tf.config.list_physical_devices('GPU')
+if gpus:
+    try:
+        tf.config.experimental.set_memory_growth(gpus[0], True)
+    except RuntimeError:
+        pass
 
 # Parse command line arguments
-parser = argparse.ArgumentParser(description='DQN training for CartPole')
+parser = argparse.ArgumentParser(description='SAC training for CartPole')
 parser.add_argument('--log-dir', type=str, help='Directory for logs')
 parser.add_argument('--model', type=str, help='Path to initial model')
-parser.add_argument('--graphics', action='store_true', default=False, help='Whether evaluation episodes should be rendered graphically')
+parser.add_argument('--graphics', action='store_true', default=False,
+                    help='Whether evaluation episodes should be rendered graphically')
 args = parser.parse_args()
 
-# Use the log directory if provided, otherwise create one
 if args.log_dir:
-	log_dir = args.log_dir
+    log_dir = args.log_dir
 else:
-	current_time = time.strftime('%Y%m%d-%H%M%S')
-	log_dir = f"logs/dqn_{current_time}"
+    current_time = time.strftime('%Y%m%d-%H%M%S')
+    log_dir = f"logs/dqn_{current_time}"
 
-# load the initial model from the arguments
-if args.model:
-	INITIAL_MODEL_PATH = args.model
-else:
-	INITIAL_MODEL_PATH = None
+INITIAL_MODEL_PATH = args.model if args.model else None
 
 os.makedirs(log_dir, exist_ok=True)
 
-# Archive a copy of this script to the logging folder 
+# Archive a copy of this script to the logging folder
 script_path = os.path.abspath(__file__)
-script_name = os.path.basename(script_path)
-script_archive_path = os.path.join(log_dir, script_name)
-shutil.copy2(script_path, script_archive_path)
-print(f"Script archived to: {script_archive_path}")
+shutil.copy2(script_path, os.path.join(log_dir, os.path.basename(script_path)))
+
 
 class TFWrappedVecEnv:
-	"""Wrapper for vectorized Gym environment to reduce TF-NumPy conversions"""
-	def __init__(self, vec_env):
-		self.vec_env = vec_env
-	
-	def reset(self, seed=None):
-		states, info = self.vec_env.reset(seed=seed)
-		# Convert states to tensor once
-		return tf.convert_to_tensor(states, dtype=tf.float32), info
-	
-	def step(self, actions):
-		# Convert actions tensor to numpy once
-		actions_np = actions.numpy() if isinstance(actions, tf.Tensor) else actions
-		
-		# Run environment step with numpy arrays
-		next_states, rewards, terminations, truncations, infos = self.vec_env.step(actions_np)
-		
-		# Convert results to tensors once
-		return (
-			tf.convert_to_tensor(next_states, dtype=tf.float32),
-			tf.convert_to_tensor(rewards, dtype=tf.float32),
-			tf.convert_to_tensor(terminations, dtype=tf.bool),
-			tf.convert_to_tensor(truncations, dtype=tf.bool),
-			infos
-		)
-	
-	def close(self):
-		return self.vec_env.close()
+    """Wrapper for vectorized Gym environment to reduce TF-NumPy conversions"""
+    def __init__(self, vec_env):
+        self.vec_env = vec_env
 
-def exit_handler():
-	# Save final model
-	final_model_path = os.path.join(log_dir, 'trained_cartpole_model_final.keras')
-	agent.save_model(final_model_path)
-	print(f"Final model saved to: {final_model_path}")
+    def reset(self, seed=None):
+        states, info = self.vec_env.reset(seed=seed)
+        return tf.convert_to_tensor(states, dtype=tf.float32), info
 
-	# Final plot update and save
-	logger.update_plot(save=True)
-	logger.save_data()
+    def step(self, actions):
+        actions_np = actions.numpy() if isinstance(actions, tf.Tensor) else actions
+        next_states, rewards, terminations, truncations, infos = self.vec_env.step(actions_np)
+        return (
+            tf.convert_to_tensor(next_states, dtype=tf.float32),
+            tf.convert_to_tensor(rewards, dtype=tf.float32),
+            tf.convert_to_tensor(terminations, dtype=tf.bool),
+            tf.convert_to_tensor(truncations, dtype=tf.bool),
+            infos
+        )
+
+    def close(self):
+        return self.vec_env.close()
 
 
-	# Update cleanup code
-	print("Stopping evaluation process...")
-	# Send stop signal through the pipe
-	try:
-		parent_conn.send("STOP")
-		# Give it some time to clean up
-		time.sleep(.3)
-	except:
-		pass
-	
-	# Check if process is still running and terminate if needed
-	if eval_process.poll() is None:  # None means still running
-		print("Terminating evaluation process...")
-		eval_process.terminate()
-	
-	# Close the connection
-	parent_conn.close()
-	
-	# Close environment
-	envs.close()
-	
-	# Report final training time
-	total_training_time = time.time() - training_start_time
-	hours, remainder = divmod(total_training_time, 3600)
-	minutes, seconds = divmod(remainder, 60)
-	print(f"Total training time: {int(hours)}h {int(minutes)}m {seconds:.2f}s")
+def get_memory_stats():
+    """Return RAM and GPU memory stats as a dict (MB)"""
+    import psutil
+    stats = {}
+    process = psutil.Process(os.getpid())
+    stats['ram_mb'] = round(process.memory_info().rss / (1024 * 1024), 1)
+    if gpus:
+        try:
+            mem_info = tf.config.experimental.get_memory_info('GPU:0')
+            stats['gpu_mb'] = round(mem_info['current'] / (1024 * 1024), 1)
+        except Exception:
+            pass
+    return stats
 
-import atexit
-atexit.register(exit_handler)
 
-def print_memory_usage():
-	import psutil
-	import os
-	process = psutil.Process(os.getpid())
-	mem_info = process.memory_info()
-	print(f"System RAM usage: {mem_info.rss / (1024 * 1024):.2f} MB")
-
-def print_gpu_memory():
-	gpus = tf.config.list_physical_devices('GPU')
-	if gpus:
-		try:
-			mem_info = tf.config.experimental.get_memory_info('GPU:0')
-			print(f"GPU memory allocated: {mem_info['current'] / (1024 * 1024):.2f} MB")
-			print(f"GPU memory peak: {mem_info['peak'] / (1024 * 1024):.2f} MB")
-		except:
-			try:
-				mem_info = tf.experimental.get_memory_usage('GPU:0')
-				print(f"GPU memory usage: {mem_info / (1024 * 1024):.2f} MB")
-			except:
-				print("GPU memory usage unavailable")
-
-# Function to calculate custom rewards
 @tf.function
 def calculate_custom_rewards(cart_positions, pole_angles, terminations, truncations):
-	"""Calculate custom rewards using TensorFlow operations"""
-	angle_rewards = 1.0 - (tf.abs(pole_angles) / MAX_ANGLE)
-	position_rewards = tf.maximum(0.0, 1.0 - (tf.abs(cart_positions) / MAX_POSITION))
-	
-	# Base rewards
-	# custom_rewards = 0.5 * angle_rewards + 0.5 * position_rewards
-	
-	custom_rewards = angle_rewards * position_rewards
+    """Calculate custom rewards using TensorFlow operations"""
+    angle_rewards = 1.0 - (tf.abs(pole_angles) / MAX_ANGLE)
+    position_rewards = tf.maximum(0.0, 1.0 - (tf.abs(cart_positions) / MAX_POSITION))
+    custom_rewards = angle_rewards * position_rewards
+    dones = tf.logical_or(terminations, truncations)
+    return custom_rewards, dones
 
-	# Apply termination penalty
-	dones = tf.logical_or(terminations, truncations)
-	# custom_rewards = tf.where(dones, tf.constant(-10.0, dtype=tf.float32), custom_rewards)
-	
-	return custom_rewards, dones
+
+def emit(record: dict):
+    """Print a JSON line to stdout and flush"""
+    print(json.dumps(record), flush=True)
+
 
 def main():
-	# Create a single environment first to get state/action dimensions
-	single_env = gym.make('CartPole-v1')
-	state_size = single_env.observation_space.shape[0]
-	action_size = single_env.action_space.n
-	single_env.close()
+    single_env = gym.make('CartPole-v1')
+    state_size = single_env.observation_space.shape[0]
+    action_size = single_env.action_space.n
+    single_env.close()
 
-	
-	# Create environment, vectorized
-	n_envs = 64  
-	gym_envs = gym.make_vec("CartPole-v1", num_envs=n_envs, vectorization_mode="async")
-	# Wrap with TF adapter
-	envs = TFWrappedVecEnv(gym_envs)
+    n_envs = 64
+    gym_envs = gym.make_vec("CartPole-v1", num_envs=n_envs, vectorization_mode="async")
+    envs = TFWrappedVecEnv(gym_envs)
 
-	# Create agent
-	agent = SACAgent(state_size, action_size, log_dir, INITIAL_MODEL_PATH)
+    agent = SACAgent(state_size, action_size, log_dir, INITIAL_MODEL_PATH)
+    logger = TrainingLogger(log_dir, window_size=25)
 
-	#Logging object for generating charts
-	logger = TrainingLogger(log_dir, window_size=25)
-	
-	# Training hyperparameters
-	TOTAL_TIMESTEPS = 10_000_000  # Total training steps
-	EVAL_FREQUENCY = 10          # How often to run evaluation episodes
-	SAVE_FREQUENCY = 5_000        # How often to save the model
-	LOG_FREQUENCY = 25            # How often to print logs
-	   
-	# Track metrics using TensorFlow variables where appropriate
-	total_steps = 0
-	episode_counts = np.zeros(n_envs, dtype=np.int32)    # Track episodes completed per env
-	env_steps = np.zeros(n_envs, dtype=np.int32)         # Track steps in current episode per env
-	env_rewards = np.zeros(n_envs, dtype=np.float32)     # Track rewards in current episode per env
-	
-	# Global statistics
-	completed_episodes = 0
-	
-	# Track metrics between logging periods instead of using deque with fixed size
-	all_episode_rewards = []
-	all_episode_lengths = []
-	all_losses = []
+    TOTAL_TIMESTEPS = 10_000_000
+    EVAL_FREQUENCY = 10
+    SAVE_FREQUENCY = 5_000
+    LOG_FREQUENCY = 25
 
-	# Track training time
-	training_start_time = time.time()
-	last_log_time = training_start_time
+    total_steps = 0
+    episode_counts = np.zeros(n_envs, dtype=np.int32)
+    env_steps = np.zeros(n_envs, dtype=np.int32)
+    env_rewards = np.zeros(n_envs, dtype=np.float32)
+    completed_episodes = 0
 
-	# Stuff for evaluations
-	evaluation_pending = False
-	last_eval_step = 0
+    training_start_time = time.time()
+    evaluation_pending = False
+    last_eval_step = 0
 
-	# Create a pipe for communication
-	parent_conn, child_conn = Pipe()
-	
-	# Create evaluation models directory
-	eval_models_dir = os.path.join(log_dir, "eval_models")
-	os.makedirs(eval_models_dir, exist_ok=True)
-	
-	# Start the evaluation worker as a separate process using subprocess
-	eval_worker_path = os.path.join(os.path.dirname(os.path.abspath(__file__)), "evaluation_worker.py")
-	
-	# Convert graphics flag to string for command line
-	graphics_str = "true" if args.graphics else "false"
-	
-	# Launch the worker as a separate Python process
-	eval_process = subprocess.Popen([
-		sys.executable,  # Python interpreter
-		eval_worker_path,
-		str(state_size),
-		str(action_size),
-		log_dir,
-		graphics_str,
-		str(child_conn.fileno())  # Pass the file descriptor
-	], 
-	pass_fds=[child_conn.fileno()])  # Pass the file descriptor to the child process
-	
-	# Close the child end of the pipe in the parent process
-	child_conn.close()
+    parent_conn, child_conn = Pipe()
+    os.makedirs(os.path.join(log_dir, "eval_models"), exist_ok=True)
 
-	# Main training loop - run for a fixed number of steps
-	states, _ = envs.reset(seed=42)
+    eval_worker_path = os.path.join(os.path.dirname(os.path.abspath(__file__)), "evaluation_worker.py")
+    graphics_str = "true" if args.graphics else "false"
 
+    eval_process = subprocess.Popen([
+        sys.executable,
+        eval_worker_path,
+        str(state_size),
+        str(action_size),
+        log_dir,
+        graphics_str,
+        str(child_conn.fileno()),
+    ], pass_fds=[child_conn.fileno()])
+    child_conn.close()
 
+    emit({"type": "start", "log_dir": log_dir, "n_envs": n_envs,
+          "total_timesteps": TOTAL_TIMESTEPS, "agent": "SAC"})
 
-	while total_steps < TOTAL_TIMESTEPS:
-		actions = agent.get_actions(states)
+    states, _ = envs.reset(seed=42)
 
-		# Take actions in all environments
-		next_states, rewards, terminations, truncations, infos = envs.step(actions)
+    try:
+        while total_steps < TOTAL_TIMESTEPS:
+            actions = agent.get_actions(states)
 
-		custom_rewards, dones = calculate_custom_rewards(next_states[:,0], next_states[:,2], terminations, truncations)
-		
-		# Store batch of experiences in replay buffer
-		agent.memory.add(states, actions, custom_rewards, next_states, dones)
+            next_states, rewards, terminations, truncations, infos = envs.step(actions)
+            custom_rewards, dones = calculate_custom_rewards(
+                next_states[:, 0], next_states[:, 2], terminations, truncations
+            )
 
-		# Update metrics for each environment
-		env_steps += 1  # Increment steps for all environments
-		env_rewards += custom_rewards.numpy()  # Add rewards to running totals
-		total_steps += 1
+            agent.memory.add(states, actions, custom_rewards, next_states, dones)
 
-		# Log metrics
-		logger.log_metrics(
-			step=total_steps,
-			lr=agent.get_current_learning_rate(),
-			epsilon=agent.epsilon,
-			alpha=agent.alpha,
-			beta=agent.memory.beta,
-		)
+            env_steps += 1
+            env_rewards += custom_rewards.numpy()
+            total_steps += 1
 
-		# Handle episode terminations for each environment
-		done_indices = np.where(dones.numpy())[0]
-		for i in done_indices:
-			completed_episodes += 1
-			episode_counts[i] += 1
-			
-			# Log episode metrics
-			logger.log_metrics(
-				step=total_steps,
-				reward=env_rewards[i],
-				length=env_steps[i]
-			)
-				
-			# Reset counters for this environment
-			env_steps[i] = 0
-			env_rewards[i] = 0
-		
-		# Update states for next iteration
-		states = next_states
-		
-		# Train periodically 
-		if total_steps % agent.train_frequency == 0:
-			loss, avg_td_error = agent.replay()
-			logger.log_metrics(step=total_steps, loss=loss, avg_td_error=avg_td_error)
+            logger.log_metrics(
+                step=total_steps,
+                lr=agent.get_current_learning_rate(),
+                epsilon=agent.epsilon,
+                alpha=agent.alpha,
+                beta=agent.memory.beta,
+            )
 
-			#soft update the target model
-			agent.update_target_models(tau=agent.tau)
-		
-		
-		# Occasionally print memory usage
-		if total_steps % (LOG_FREQUENCY) == 0:
-			total_training_time = time.time() - training_start_time
-			hours, remainder = divmod(total_training_time, 3600)
-			minutes, seconds = divmod(remainder, 60)
-			print(f"Total training time: {int(hours)}h {int(minutes)}m {seconds:.2f}s")
-			print("Steps: " + str(total_steps))
-			print("Memory: "+ str(int(agent.memory.current_size)) + " / " + str(int(agent.memory.buffer_size)))
+            done_indices = np.where(dones.numpy())[0]
+            for i in done_indices:
+                completed_episodes += 1
+                episode_counts[i] += 1
+                logger.log_metrics(
+                    step=total_steps,
+                    reward=env_rewards[i],
+                    length=env_steps[i]
+                )
+                env_steps[i] = 0
+                env_rewards[i] = 0
 
-		if total_steps % (LOG_FREQUENCY * 10) == 0:
-			print_memory_usage()
-			print_gpu_memory()
-		
-		# Check if we need to trigger a new evaluation
-		if total_steps % EVAL_FREQUENCY == 0 and not evaluation_pending:
-			agent.save_model(completed_episodes)
-			
-			# Request evaluation through the pipe
-			model_path = os.path.join(agent.log_dir, f"model_episode_{completed_episodes}_policy.keras")
-			parent_conn.send((model_path, total_steps))
-			evaluation_pending = True
-			last_eval_step = total_steps
-		
-		# Check if evaluation results are available
-		if evaluation_pending and parent_conn.poll():
-			try:
-				eval_result = parent_conn.recv()
-				
-				# Check if this is an error
-				if eval_result[0] == "ERROR":
-					print(f"Error in evaluation process: {eval_result[1]}")
-				else:
-					# Unpack results
-					eval_step, eval_score, eval_reward = eval_result
-					
-					# Log evaluation results
-					logger.log_metrics(step=eval_step, eval_reward=eval_reward*eval_score)
-					print(f"--- EVALUATION at step {eval_step}: Score: {eval_score}, Reward: {eval_reward*eval_score:.4f}")
-				
-				# Mark evaluation as completed
-				evaluation_pending = False
-			except Exception as e:
-				print(f"Error processing evaluation result: {e}")
+            states = next_states
 
-		# HARD update target model periodically
-		if total_steps % agent.update_target_frequency == 0:
-			agent.update_target_model(tau=1.0)
-			print("Target model hard updated")
-		
-		# Update plot periodically based on time rather than steps
-		logger.maybe_update_plot(
-			force=(total_steps % (LOG_FREQUENCY * 5) == 0),
-			save=(total_steps % SAVE_FREQUENCY == 0)
-		)
+            if total_steps % agent.train_frequency == 0:
+                loss, avg_td_error = agent.replay()
+                logger.log_metrics(step=total_steps, loss=loss, avg_td_error=avg_td_error)
+                agent.update_target_models(tau=agent.tau)
 
+            # Structured progress log
+            if total_steps % LOG_FREQUENCY == 0:
+                elapsed = time.time() - training_start_time
+                mem_stats = get_memory_stats() if total_steps % (LOG_FREQUENCY * 10) == 0 else {}
+                emit({
+                    "type": "progress",
+                    "step": int(total_steps),
+                    "elapsed_s": round(elapsed, 1),
+                    "episodes": int(completed_episodes),
+                    "alpha": round(float(agent.alpha), 4),
+                    "lr": round(float(agent.get_current_learning_rate()), 6),
+                    "mem_size": int(agent.memory.current_size),
+                    **mem_stats,
+                })
 
+            # Trigger evaluation
+            if total_steps % EVAL_FREQUENCY == 0 and not evaluation_pending:
+                agent.save_model(completed_episodes)
+                model_path = os.path.join(
+                    agent.log_dir, f"model_episode_{completed_episodes}_policy.keras"
+                )
+                parent_conn.send((model_path, total_steps))
+                evaluation_pending = True
+                last_eval_step = total_steps
 
-		if total_steps == 5: 
-			pr = cProfile.Profile()
-			pr.enable()
+            # Collect evaluation results
+            if evaluation_pending and parent_conn.poll():
+                try:
+                    eval_result = parent_conn.recv()
+                    if eval_result[0] == "ERROR":
+                        emit({"type": "eval_error", "msg": eval_result[1]})
+                    else:
+                        eval_step, eval_score, eval_reward = eval_result
+                        logger.log_metrics(step=eval_step, eval_reward=eval_reward * eval_score)
+                        record = {
+                            "type": "eval",
+                            "step": int(eval_step),
+                            "score": int(eval_score),
+                            "reward": round(float(eval_reward * eval_score), 4),
+                        }
+                        emit(record)
+                        logger.log_json(record)
+                    evaluation_pending = False
+                except Exception as e:
+                    emit({"type": "eval_error", "msg": str(e)})
 
-		if total_steps % 100 == 0: 
-			pr.disable()
-			profile_path = os.path.join(log_dir, 'main_loop_profile.prof')
-			pr.dump_stats(profile_path)
+            # Hard target update
+            if total_steps % agent.update_target_frequency == 0:
+                agent.update_target_models(tau=1.0)
+                emit({"type": "target_hard_update", "step": int(total_steps)})
 
-			# Create a stats object
-			stats = pstats.Stats(profile_path)
+            # Save plot periodically
+            logger.maybe_update_plot(
+                force=(total_steps % (LOG_FREQUENCY * 5) == 0),
+                save=(total_steps % SAVE_FREQUENCY == 0)
+            )
 
-			# Print overall summary
-			print("\n=== TOP TIME-CONSUMING FUNCTIONS (by cumtime) ===")
-			stats.sort_stats('cumtime').print_stats(15)  # Top functions by cumulative time
+        agent.save_model(completed_episodes)
+        emit({"type": "done", "step": int(total_steps), "episodes": int(completed_episodes)})
+        logger.update_plot(save=True)
+        logger.save_data()
 
-			print("\n=== TOP TIME-CONSUMING FUNCTIONS (by tottime) ===")
-			stats.sort_stats('tottime').print_stats(15)  # Top functions by total time spent in the function itself
+    except KeyboardInterrupt:
+        emit({"type": "interrupted", "step": int(total_steps)})
+    except Exception as e:
+        emit({"type": "error", "msg": str(e)})
+        raise
+    finally:
+        try:
+            parent_conn.send("STOP")
+            time.sleep(0.5)
+        except Exception:
+            pass
 
-			# Filter to just see your code
-			print("\n=== YOUR CODE ONLY ===")
-			my_code_path = os.path.dirname(os.path.abspath(__file__))
-			stats.sort_stats('cumtime').print_stats(my_code_path, 15)
+        if eval_process.poll() is None:
+            eval_process.terminate()
 
-			# For specific interesting functions in your code, find what they're calling
-			print("\n=== KEY FUNCTION ANALYSIS ===")
-			for func_name in ['agent.replay', 'agent.remember_batch', 'calculate_custom_rewards']:
-				matching_funcs = [f for f in stats.stats if func_name in str(f[2])]
-				for func in matching_funcs:
-					print(f"\nCallees of {func[2]}:")
-					stats.sort_stats('cumtime').print_callees(func[2], 10)
-			pr.enable()
+        parent_conn.close()
+        envs.close()
+        logger.close()
 
-		
+        elapsed = time.time() - training_start_time
+        emit({"type": "shutdown", "elapsed_s": round(elapsed, 1)})
 
 
 if __name__ == "__main__":
-	main()
+    main()

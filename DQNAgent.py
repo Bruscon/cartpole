@@ -246,14 +246,7 @@ class DQNAgent:
         final_td_errors = total_td_errors[-1]
         
         # Update priorities in the replay buffer (this happens after EVERY training)
-        import time
-        priority_start = time.time()
         self.memory.update_priorities(indices, final_td_errors)
-        priority_time = time.time() - priority_start
-        
-        # Log priority update time occasionally
-        if self.optimizer_steps % 10 == 0:
-            print(f"Priority update took: {priority_time*1000:.2f}ms")
         
         # Decay epsilon 
         if self.epsilon > self.epsilon_min:
@@ -319,4 +312,4 @@ class DQNAgent:
         """Save model checkpoint"""
         model_path = os.path.join(self.log_dir, f"model_episode_{episode}.keras")
         self.model.save(model_path)
-        print(f"Model saved to: {model_path}")
+        return model_path

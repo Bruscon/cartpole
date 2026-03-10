@@ -81,49 +81,27 @@ def main():
     else:
         eval_env = gym.make('CartPole-v1')
     
-    print(f"Evaluation worker started, waiting for evaluation requests...")
-    
-    # Main evaluation loop
+    # Main evaluation loop (runs silently - results sent over pipe)
     while True:
         try:
-            # Get a model path from the connection (blocking call)
             message = conn.recv()
-            
-            # Check if we received a termination signal
             if message == "STOP":
-                print("Evaluation worker received stop signal")
                 break
-            
-            # Unpack evaluation data
+
             model_path, total_steps = message
-            
-            print(f"Received evaluation request for model at step {total_steps}")
-            
-            # Load the model directly
+
             try:
                 saved_model = tf.keras.models.load_model(model_path)
-                
-                # Run the evaluation episode
                 eval_score, eval_reward = run_evaluation_episode(saved_model, eval_env, state_size)
-                
-                # Send results back to main process
                 conn.send((total_steps, eval_score, eval_reward))
-                
-                print(f"Evaluation completed at step {total_steps}: Score {eval_score}, Reward {eval_reward:.4f}")
-                
             except Exception as e:
-                print(f"Error loading or evaluating model {model_path}: {e}")
                 conn.send(("ERROR", f"Model loading/evaluation failed: {str(e)}"))
-            
+
         except Exception as e:
-            print(f"Error in evaluation worker: {e}")
-            # Put the error in the result queue to inform the main process
             conn.send(("ERROR", str(e)))
-    
-    # Clean up
+
     eval_env.close()
     conn.close()
-    print("Evaluation worker stopped")
 
 if __name__ == "__main__":
     main()
