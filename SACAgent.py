@@ -33,7 +33,7 @@ class SACAgent:
         self.gamma = 0.999                  # Discount factor
         self.n_step = 3                     # Multi-step return horizon
         self.batch_size = 256               # Size of batches for training
-        self.learning_rate = 0.03          # Initial learning rate
+        self.learning_rate = 0.04          # Initial learning rate
         self.learning_rate_decay = 0.999    # learning rate decay
         self.epochs = 3                     # number of training loops per step
         self.train_frequency = 1            # How many time steps between training runs
