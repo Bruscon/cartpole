@@ -22,14 +22,14 @@ class SACAgent:
         # Hyperparameters (mostly inherited from DQN)
         self.clipnorm = 2.0                 # gradient clipping
         self.memory_len = 2**17             # Experience replay buffer
-        self.gamma = 0.995                  # Discount factor
-        self.batch_size = 1024              # Size of batches for training
-        self.learning_rate = 0.01          # Initial learning rate (lower than DQN)
-        self.learning_rate_decay = 0.999    # learning rate decay 
+        self.gamma = 0.999                  # Discount factor
+        self.batch_size = 256               # Size of batches for training
+        self.learning_rate = 0.01          # Initial learning rate
+        self.learning_rate_decay = 0.999    # learning rate decay
         self.epochs = 3                     # number of training loops per step
         self.train_frequency = 1            # How many time steps between training runs
         self.update_target_frequency = 1000000  # How often to HARD update target network (steps). effectively disabled
-        self.tau = 0.05                     # Soft update parameter 
+        self.tau = 0.1                      # Soft update parameter
         
         # SAC specific hyperparameters
         self.target_entropy = -1.2*float(action_size)  # Target entropy = -dim(A)
@@ -99,8 +99,8 @@ class SACAgent:
         """Policy Network for discrete actions"""
         model = Sequential([
             Input(shape=(self.state_size,)),
-            Dense(12, activation='relu'),
-            Dense(12, activation='relu'),
+            Dense(64, activation='relu'),
+            Dense(64, activation='relu'),
             Dense(self.action_size, activation='linear')  # Logits, not softmax
         ])
         return model
@@ -273,22 +273,22 @@ class SACAgent:
         """Train the networks using prioritized experience replay"""
         if self.memory.current_size < self.train_start:
             return 0.0, 0.0
-        
+
         # Sample batch
         states, actions, rewards, next_states, dones, is_weights, indices = self.memory.sample(self.batch_size)
-        
+
         # Run training step
         loss, td_errors, entropy = self._train_step(states, actions, rewards, next_states, dones, is_weights)
-        
+
         # Update priorities
         self.memory.update_priorities(indices, td_errors)
-        
+
         # Soft update target networks
         self.update_target_models()
-        
+
         # Increment optimizer steps
         self.optimizer_steps += 1
-        
+
         return loss.numpy(), tf.reduce_mean(tf.abs(td_errors)).numpy()
 
     @tf.function
