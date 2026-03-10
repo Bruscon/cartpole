@@ -50,7 +50,7 @@ class SACAgent:
         self.beta_end = 1.0                 # reduces bias
         self.beta_frames = 50_000           # reduces bias
         
-        self.train_start = 4 * self.batch_size  # Minimum experiences before training
+        self.train_start = 8 * self.batch_size  # Minimum experiences before training
         
         # Create memory object (reuse existing)
         self.memory = TFPrioritizedReplayBuffer(
