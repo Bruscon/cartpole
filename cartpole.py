@@ -205,6 +205,7 @@ def main():
             if total_steps % agent.train_frequency == 0:
                 loss, avg_td_error = agent.replay()
                 logger.log_metrics(step=total_steps, loss=loss, avg_td_error=avg_td_error)
+                agent.update_target_models(tau=agent.tau)
 
             # Structured progress log
             if total_steps % LOG_FREQUENCY == 0:
