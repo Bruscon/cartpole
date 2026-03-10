@@ -62,21 +62,17 @@ class SACAgent:
             beta_frames=self.beta_frames
         )
         
-        # Learning rate schedulers
+        # Learning rate scheduler
         self.lr_schedule = keras.optimizers.schedules.ExponentialDecay(
             initial_learning_rate=self.learning_rate,
             decay_steps=1,
             decay_rate=self.learning_rate_decay)
-        self.policy_lr_schedule = keras.optimizers.schedules.ExponentialDecay(
-            initial_learning_rate=0.01,
-            decay_steps=1,
-            decay_rate=self.learning_rate_decay)
         self.optimizer_steps = 0
-
+        
         # Create optimizers for each network
         self.q1_optimizer = Adam(learning_rate=self.lr_schedule, clipnorm=self.clipnorm)
         self.q2_optimizer = Adam(learning_rate=self.lr_schedule, clipnorm=self.clipnorm)
-        self.policy_optimizer = Adam(learning_rate=self.policy_lr_schedule, clipnorm=self.clipnorm)
+        self.policy_optimizer = Adam(learning_rate=self.lr_schedule, clipnorm=self.clipnorm)
         self.alpha_optimizer = Adam(learning_rate=3e-4)  # Fixed LR for temperature
         
         # Handle mixed precision if enabled
