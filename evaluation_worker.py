@@ -12,39 +12,41 @@ import time
 MAX_ANGLE = 0.2095  # Maximum angle before termination (in radians)
 MAX_POSITION = 2.4  # Maximum cart position
 
-def run_evaluation_episode(model, eval_env, state_size):
-    """Run a single evaluation episode with the provided model and environment"""
-    done = False
-    score = 0
-    rewards = []
+def run_evaluation_batch(model, vec_env, state_size, n_episodes):
+    """Run n_episodes in parallel using a vectorized env, return mean score and reward"""
+    states, _ = vec_env.reset()
+    states_tensor = tf.convert_to_tensor(states, dtype=tf.float32)
 
-    # Reset the evaluation environment
-    eval_state, _ = eval_env.reset()
-    eval_state = np.reshape(eval_state, [1, state_size])
-    eval_state_tensor = tf.convert_to_tensor(eval_state, dtype=tf.float32)
+    scores = np.zeros(n_episodes, dtype=np.int32)
+    reward_sums = np.zeros(n_episodes, dtype=np.float64)
+    reward_counts = np.zeros(n_episodes, dtype=np.int32)
+    active = np.ones(n_episodes, dtype=bool)
 
-    while not done:
-        # Get action from model (greedy)
-        q_values = model(eval_state_tensor, training=False)
-        action = tf.argmax(q_values, axis=1).numpy()[0]
-        
-        # Take action
-        next_state, reward, terminated, truncated, _ = eval_env.step(action)
-        done = terminated or truncated
+    while np.any(active):
+        q_values = model(states_tensor, training=False)
+        actions = tf.argmax(q_values, axis=1).numpy()
 
-        # Calculate custom reward
-        cart_pos = np.array([next_state[0]])
-        pole_angle = np.array([next_state[2]])
-        custom_reward = (1.0 - (np.abs(pole_angle) / MAX_ANGLE)) * 0.5 + \
-                        (np.maximum(0.0, 1.0 - (np.abs(cart_pos) / MAX_POSITION))) * 0.5
+        next_states, rewards, terminations, truncations, infos = vec_env.step(actions)
+        dones = np.logical_or(terminations, truncations)
 
-        rewards.append(custom_reward[0])
-        eval_state = np.reshape(next_state, [1, state_size])
-        eval_state_tensor = tf.convert_to_tensor(eval_state, dtype=tf.float32)
-        score += 1
+        # Custom reward for active envs
+        cart_pos = next_states[:, 0]
+        pole_angle = next_states[:, 2]
+        custom_rewards = (1.0 - (np.abs(pole_angle) / MAX_ANGLE)) * 0.5 + \
+                         np.maximum(0.0, 1.0 - (np.abs(cart_pos) / MAX_POSITION)) * 0.5
 
-    avg_reward = np.mean(rewards) if rewards else 0
-    return score, avg_reward
+        scores[active] += 1
+        reward_sums[active] += custom_rewards[active]
+        reward_counts[active] += 1
+
+        # Mark finished episodes as inactive
+        newly_done = active & dones
+        active[newly_done] = False
+
+        states_tensor = tf.convert_to_tensor(next_states, dtype=tf.float32)
+
+    avg_rewards = np.where(reward_counts > 0, reward_sums / reward_counts, 0.0)
+    return float(np.mean(scores)), float(np.mean(avg_rewards))
 
 # This function is run directly when this script is executed independently
 def main():
@@ -75,12 +77,13 @@ def main():
         except RuntimeError as e:
             print(f"GPU config error: {e}")
     
-    # Create evaluation environment
+    # Create vectorized evaluation environment (5 parallel episodes)
+    n_eval_episodes = 5
     if graphics:
-        eval_env = gym.make('CartPole-v1', render_mode='human')
+        eval_env = gym.make_vec('CartPole-v1', num_envs=n_eval_episodes, render_mode='human')
     else:
-        eval_env = gym.make('CartPole-v1')
-    
+        eval_env = gym.make_vec('CartPole-v1', num_envs=n_eval_episodes)
+
     # Main evaluation loop (runs silently - results sent over pipe)
     while True:
         try:
@@ -92,16 +95,9 @@ def main():
 
             try:
                 saved_model = tf.keras.models.load_model(model_path)
-                # Run 5 episodes per checkpoint for reduced noise
-                n_eval_episodes = 5
-                scores = []
-                rewards = []
-                for _ in range(n_eval_episodes):
-                    ep_score, ep_reward = run_evaluation_episode(saved_model, eval_env, state_size)
-                    scores.append(ep_score)
-                    rewards.append(ep_reward)
-                avg_score = np.mean(scores)
-                avg_reward = np.mean(rewards)
+                avg_score, avg_reward = run_evaluation_batch(
+                    saved_model, eval_env, state_size, n_eval_episodes
+                )
                 conn.send((total_steps, avg_score, avg_reward))
             except Exception as e:
                 conn.send(("ERROR", f"Model loading/evaluation failed: {str(e)}"))
