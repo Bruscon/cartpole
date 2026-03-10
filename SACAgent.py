@@ -44,7 +44,7 @@ class SACAgent:
         self.log_alpha = tf.Variable(0.0, trainable=True)  # Entropy temperature (log scale for stability)
         
         # Prioritized replay hyperparameters (same as DQN)
-        self.priority_alpha = 0.4                    # prioritization parameter
+        self.priority_alpha = 0.7                    # prioritization parameter
         self.beta_start = 0.3               # reduces bias
         self.beta_end = 1.0                 # reduces bias
         self.beta_frames = 50_000           # reduces bias
