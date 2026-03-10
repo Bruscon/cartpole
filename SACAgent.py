@@ -37,7 +37,7 @@ class SACAgent:
         self.epochs = 3                     # number of training loops per step
         self.train_frequency = 1            # How many time steps between training runs
         self.update_target_frequency = 1000000  # How often to HARD update target network (steps). effectively disabled
-        self.tau = 0.1                      # Soft update parameter
+        self.tau = 0.15                     # Soft update parameter
         
         # SAC specific hyperparameters
         self.target_entropy = -1.2*float(action_size)  # Target entropy = -dim(A)
