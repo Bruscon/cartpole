@@ -120,18 +120,25 @@ Columns: `experiment | description | converged | avg_step | run_details | status
 
 ## Running Training
 
-Claude spawns **5 parallel subagents**, each running one training session.
-Each subagent should:
-1. Activate venv: `source /home/nick/rl-env/bin/activate`
-2. Run `python cartpole.py --max-seconds 180` from the project root (use a unique `--log-dir /tmp/expN_runM`)
-3. Parse stdout JSON for eval scores
-4. Compute: did the 5-episode-avg rolling-10 criterion get met? At what step?
-5. Return: convergence step (or "DNF"), brief score trajectory summary
+Claude spawns **1 background subagent** that launches all 5 training runs in parallel.
+The subagent should:
+1. Launch 5 training processes in parallel (background bash), each with a unique `--log-dir /tmp/expN_runM`:
+   `source /home/nick/rl-env/bin/activate && cd /home/nick/Documents/cartpole && python cartpole.py --max-seconds 180 --log-dir /tmp/<exp>_run<N>`
+2. Wait for all 5 to finish (~3 minutes).
+3. For each run, parse the last `{"type": "done", ...}` line. If it has `"convergence_step": N`, converged at step N. Otherwise DNF.
+4. Return: per-run convergence steps (or DNF), and any errors.
+
+Convergence detection is built into `cartpole.py` — the subagent does NOT need to recompute it.
+While the subagent runs in background, Claude should plan the next experiment (write spec, launch Codex).
 
 ## Baseline
 
-Current baseline (after hyperparameter tuning): **3/3 converge, avg step 890**
-Config: policy net 64-64, tau=0.1, batch_size=256, gamma=0.999
+Current Phase 2 baseline: **0/5 DNF** (peak rolling avgs 242-414)
+Config: policy net 64-64, tau=0.1, batch_size=256, gamma=0.999, lr=0.01
 
-The first experiment in a new session should re-establish baseline if the code has changed,
-or skip straight to proposing improvements if results.tsv shows a recent baseline.
+The agent learns but can't sustain 475+ 5-episode mean in 180s. Policy instability
+(scores oscillate between 150-500 late in training) is the main bottleneck.
+Architectural changes (layer norm, dueling, etc.) are needed to stabilize and speed convergence.
+
+Skip re-baselining unless the eval infrastructure code has changed. Check `codex/results.tsv`
+for the most recent baseline row.

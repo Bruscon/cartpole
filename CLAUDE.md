@@ -61,12 +61,16 @@ Be specific enough that Codex can implement without asking questions. Reference 
 ## Running Training
 
 Do NOT run `python cartpole.py` directly in your main context — the output is too verbose.
-Spawn **5 parallel general-purpose subagents**, each running one training session.
-Each subagent should:
-1. Run `source /home/nick/rl-env/bin/activate && cd /home/nick/Documents/cartpole && python cartpole.py --max-seconds 180 --log-dir /tmp/<exp>_run<N>`
-2. Parse stdout JSON for eval scores
-3. Determine if/when convergence criterion was met
-4. Return: convergence step (or "DNF"), brief score trajectory, any errors
+Spawn **1 background subagent** that runs all 5 training sessions in parallel.
+The subagent should:
+1. Launch 5 training processes in parallel (background bash commands), each with a unique log dir:
+   `source /home/nick/rl-env/bin/activate && cd /home/nick/Documents/cartpole && python cartpole.py --max-seconds 180 --log-dir /tmp/<exp>_run<N>`
+2. Wait for all 5 to finish (~3 minutes).
+3. For each run, parse the last `{"type": "done", ...}` line from stdout. If it has `"convergence_step": N`, the run converged at step N. If no `convergence_step` field, it's a DNF.
+4. Return a summary: per-run convergence steps (or DNF), and any errors.
+
+The convergence detection is built into `cartpole.py` — do NOT recompute it in the subagent.
+While the training subagent runs in the background, plan your next experiment (write specs, launch Codex, etc.).
 
 ## Experiment Flow
 
@@ -92,11 +96,11 @@ Don't just twiddle hyperparameters. Think about:
 
 ## Evaluation Infrastructure
 
-The current eval system runs one episode per checkpoint. This is noisy.
-One of the first experiments should be to **improve eval reliability**:
-- Run multiple episodes per eval checkpoint (e.g., 5 episodes, report mean)
-- This reduces noise and makes the convergence criterion more meaningful
-- Modify `evaluation_worker.py` and the eval scoring in `cartpole.py`
+The eval system runs **5 parallel episodes per checkpoint** (vectorized env in `evaluation_worker.py`) and reports the mean score. `cartpole.py` tracks the rolling average of the last 10 eval checkpoints and emits convergence info automatically. This is already implemented — do not modify it.
+
+## Codex vs. Direct Edits
+
+Use Codex for all multi-file changes and architectural experiments. For **single-value hyperparameter changes** (e.g., changing `self.learning_rate = 0.01` to `0.03`), you may edit directly without Codex to save time.
 
 ## What You Cannot Change
 - The orchestration files in `codex/` (do not modify program.md or results.tsv format)
