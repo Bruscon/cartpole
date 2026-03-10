@@ -17,3 +17,4 @@ exp13	target_entropy -2.4 to -1.0	2/3	1145	1310,980,DNF	revert	More exploration 
 exp14	clipnorm 2.0 to 1.0	2/3	1200	1220,1180,DNF	revert	Tighter clipping didn't help. Gradients aren't the bottleneck.
 exp15	replay buffer 131k to 32k	3/3	1640	1410,1520,1990	revert	All converged but much slower. Larger buffer = more diverse training data.
 # Phase 2: new eval criteria (5 episodes per checkpoint, rolling 10 avg >= 475, 5 runs). Re-baseline needed.
+baseline_v2	phase 1 best config + 5-ep parallel eval (policy 64-64, tau=0.1, batch=256, gamma=0.999)	0/5	DNF	DNF,DNF,DNF,DNF,DNF	baseline	5-ep mean is much harder than 1-ep eval. Peak rolling avgs 242-414. Agent learns but can't sustain 475+ avg across 5 eps in 180s. Need architectural improvements.
