@@ -1,7 +1,7 @@
 import numpy as np
 import tensorflow as tf
 from tensorflow.keras.models import Model, Sequential, clone_model
-from tensorflow.keras.layers import Activation, Dense, Input, Lambda, LayerNormalization
+from tensorflow.keras.layers import Activation, Dense, Input, LayerNormalization
 from tensorflow.keras.optimizers import Adam
 from tensorflow.keras.losses import Huber
 from tensorflow.keras.callbacks import TensorBoard
@@ -11,6 +11,14 @@ import os
 import random
 
 from TFPrioritizedReplayBuffer import TFPrioritizedReplayBuffer
+
+
+class DuelingCombine(keras.layers.Layer):
+    """Combines value and advantage streams: Q = V + A - mean(A)"""
+    def call(self, inputs):
+        value, advantage = inputs
+        return value + advantage - keras.ops.mean(advantage, axis=1, keepdims=True)
+
 
 class SACAgent:
     def __init__(self, state_size, action_size, log_dir, initial_model_path=None):
@@ -97,10 +105,7 @@ class SACAgent:
 
         value = Dense(1, activation='linear')(x)
         advantage = Dense(self.action_size, activation='linear')(x)
-        q_values = Lambda(
-            lambda va: va[0] + va[1] - tf.reduce_mean(va[1], axis=1, keepdims=True),
-            output_shape=(self.action_size,)
-        )([value, advantage])
+        q_values = DuelingCombine()([value, advantage])
 
         model = Model(inputs=inputs, outputs=q_values)
         return model
