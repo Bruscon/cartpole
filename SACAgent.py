@@ -95,32 +95,36 @@ class SACAgent:
         
     def _build_q_model(self):
         """Dueling Q-Network architecture"""
+        ortho_relu = tf.keras.initializers.Orthogonal(gain=tf.sqrt(2.0))
+        ortho_lin = tf.keras.initializers.Orthogonal(gain=1.0)
         inputs = Input(shape=(self.state_size,))
-        x = Dense(64, activation=None)(inputs)
+        x = Dense(64, activation=None, kernel_initializer=ortho_relu)(inputs)
         x = LayerNormalization()(x)
         x = Activation('relu')(x)
-        x = Dense(64, activation=None)(x)
+        x = Dense(64, activation=None, kernel_initializer=ortho_relu)(x)
         x = LayerNormalization()(x)
         x = Activation('relu')(x)
 
-        value = Dense(1, activation='linear')(x)
-        advantage = Dense(self.action_size, activation='linear')(x)
+        value = Dense(1, activation='linear', kernel_initializer=ortho_lin)(x)
+        advantage = Dense(self.action_size, activation='linear', kernel_initializer=ortho_lin)(x)
         q_values = DuelingCombine()([value, advantage])
 
         model = Model(inputs=inputs, outputs=q_values)
         return model
-    
+
     def _build_policy_model(self):
         """Policy Network for discrete actions"""
+        ortho_relu = tf.keras.initializers.Orthogonal(gain=tf.sqrt(2.0))
+        ortho_lin = tf.keras.initializers.Orthogonal(gain=0.01)
         model = Sequential([
             Input(shape=(self.state_size,)),
-            Dense(64, activation=None),
+            Dense(64, activation=None, kernel_initializer=ortho_relu),
             LayerNormalization(),
             Activation('relu'),
-            Dense(64, activation=None),
+            Dense(64, activation=None, kernel_initializer=ortho_relu),
             LayerNormalization(),
             Activation('relu'),
-            Dense(self.action_size, activation='linear')  # Logits, not softmax
+            Dense(self.action_size, activation='linear', kernel_initializer=ortho_lin)
         ])
         return model
     
