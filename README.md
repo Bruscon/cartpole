@@ -1,120 +1,70 @@
-# Ultra-Fast CartPole-v1 Solution
+# Two AIs Walked Into a Lab
 
-A heavily optimized Deep Double Q-Network implementation that solves CartPole-v1 in under 60 seconds using custom GPU-accelerated data structures, vectorized environments, and advanced TensorFlow optimization.
+One was the scientist. The other was the coder. I just watched.
 
-*To my knowledge, this is the fastest CartPole training implementation available. If you're aware of a faster one, I'd genuinely love to see it.*
+I'd already spent months tuning this CartPole agent by hand. I thought it was optimal. Then I gave the codebase to Claude (strategist) and Codex (implementer) and told them to make it learn faster. They ran 36 experiments on their own. No human touched the code. No human picked the hyperparameters.
 
-## Performance Overview
+They took my "optimal" agent and made it converge 3x faster, then made it perfectly reliable on a harder eval that my version couldn't even pass.
 
-![Training Progress](media/training_metrics.png)
-*Training plots showing rapid convergence*
+The part that surprised me: when blind tuning stopped working, they stopped tuning and started diagnosing. They read the training logs, traced the failures to weight initialization variance, and fixed it in one shot. That single insight turned a 60% failure rate into 100% reliability.
 
-![Solved CartPole](media/cartpole_demo.gif)
+![AutoResearcher results](media/agentic_loop_speedup.png)
 
-*Trained agent balancing the pole*
+## Karpathy's autoresearch
 
-Typically, cartpole is considered "solved" when the rolling average episode score is >195. My implementation defines it as continuously scoring a perfect 500 on evaluation episodes (no epsilon)
+This project is directly inspired by Karpathy's [autoresearch](https://github.com/karpathy/autoresearch) repo. His setup: give an AI agent a small LLM training codebase, a fixed 5-minute time budget, and one metric to optimize. The agent modifies the code, trains, checks if the result improved, keeps or discards, and repeats. You wake up to a log of experiments and a better model.
 
-**Key Metrics:**
-- **Training time**: <60 seconds (This includes all TensorFlow initialization!)
-- **Parallelization**: 64 vectorized environments
-- **GPU acceleration**: Custom Tensor-accelerated training loop and SumTree implementation with 5x+ sampling speedup
-- **Throughput**: 10M+ timesteps efficiently processed
+I took that idea and ran with it in a different direction. Instead of LLM training, I pointed it at reinforcement learning (CartPole). Instead of one agent editing one file, I split it into two: Claude as the strategist proposing experiments, Codex as the coder implementing them. And instead of just "try stuff and keep what works," the agents follow a proper scientific method: hypothesize, implement, measure across multiple runs (RL is noisy), keep or revert, log the lesson, repeat.
 
-## Technical Architecture
+The core loop is the same as Karpathy's. The difference is that mine has to deal with RL's variance problem (you need multiple runs to know if something actually worked) and it builds up a structured experiment history that feeds into future hypotheses.
 
-### GPU-Accelerated Prioritized Replay
-The core innovation is a custom **TensorFlow-native SumTree** implementation for prioritized experience replay:
+![Trained agent balancing the pole](media/cartpole_demo.gif)
 
-- **Three-tier optimization**: Pure Python → NumPy vectorization for building/rebuilding tree → TensorFlow GPU-accelerated parallel tree access
-- **Vectorized tree traversal**: Batch sampling using TensorFlow operations are O(log(n)), 5x faster and scalable
-- **Smart rebuilds**: Partial tree reconstruction occurs after a batch-add to minimize overhead
-- **Memory efficiency**: Float32 precision with strategic memory layouts. Indexes are shared across all data tensors 
+## What actually happened
 
-The SumTree implementation alone represents a significant algorithmic contribution, achieving >5x sampling performance improvements through vectorized TensorFlow operations while maintaining mathematical correctness.
+**Phase 1** started with a barely-functional agent. Over 15 experiments the AIs found the right network size, discount factor, batch size, and replay buffer config. Convergence went from impossible to ~890 steps.
 
-### Vectorized Environment Processing
-- **TFWrappedVecEnv**: Minimizes costly TensorFlow-NumPy conversions
-- **64 parallel environments**: Maximizes CPU utilization
-- **Batched operations**: Actions, rewards, and state transitions processed in parallel on GPU
+Then I made the test much harder: 5 evaluation episodes instead of 1, higher passing threshold, more runs required. The optimized Phase 1 agent immediately went back to DNF.
 
-### Advanced DQN Implementation
-- **Double DQN**: Separate target networks with soft target updates
-- **Epsilon and learning rate decay**: balances exploration and exploitation throughout the learning process
-- **Custom rewards**: Reward varies continuously from 1 to 0 depending on cart angle and position. This provides better gradients than the standard cartpole reward system
-- **Mixed precision**: RTX 3090 optimization with gradient scaling
-- **Gradient clipping**: Huber loss with configurable delta for stability
+**Phase 2** required real breakthroughs. The AIs stacked dueling networks, layer normalization, and an aggressive learning rate to get the first convergences. But reliability was stuck at 60%. Eight straight experiments failed to improve it.
 
-## Performance Engineering
+That's when the diagnosis happened. Instead of trying experiment #9, the AI read the training logs of a failed run, noticed the collapse pattern, and proposed orthogonal initialization with small policy output gains. One experiment: 60% to 100% reliability. After that, previously-failed ideas like n-step returns suddenly worked, and convergence dropped from 634 to 496 steps.
 
-**Memory Optimization:**
-- Strategic GPU memory growth configuration
-- Efficient batch processing (1024 samples). Larger batches train faster but require more env steps to gather initial training data. I've found 1024 to be the sweet-spot
-- Real-time memory usage monitoring
+## The experiment log
 
-**Profiling Integration:**
-- Built-in cProfile for bottleneck identification
-- Comprehensive timing analysis of training loop components
+Every experiment, outcome, and lesson: [codex/results.tsv](codex/results.tsv)
 
-**Neural Architecture:**
-- Compact 12→12→2 network for minimal computational overhead. Network forward passes and backpropogation run on a custom training loop on GPU
-- Optimized hyperparameters: γ=0.998, τ=0.06, α=0.7. This is extremely aggressive for Q learning generally but works great for this simple environment. 
+Highlights from 36 experiments:
+- **13 kept, 23 reverted.** Most ideas don't work, and that's fine.
+- **Fastest single run**: 420 steps (but unreliable, so it was reverted)
+- **Best config**: 496 avg steps, 5/5 convergence, zero failures
+- **Biggest breakthrough**: orthogonal init (exp29). Fixed the root cause, not the symptoms.
 
-Training automatically generates:
-- Real-time performance visualizations
-- Model checkpoints with evaluation metrics
-- Comprehensive logging and profiling data
-- Backups of scripts so you know what you changed!
+## Running it
 
-
-## Installation
-
-**Platform Support:** Linux only (tested on Ubuntu 22.04)
-
-### Prerequisites
 ```bash
-# Verify NVIDIA GPU and drivers
-nvidia-smi
-
-# Install CUDA toolkit (if not already installed)
-sudo apt update
-sudo apt install nvidia-cuda-toolkit
-```
-This implementation MAY work without an NVIDIA GPU/CUDA but I have not tested it. 
-
-### Setup
-```bash
-# Clone repository
-git clone https://github.com/Bruscon/cartpole.git
-cd cartpole
-
-# Create virtual environment (recommended)
-python3 -m venv rl-env
-source rl-env/bin/activate
-
-# Install dependencies
-pip install -r requirements.txt
-
-# Verify GPU detection
-python -c "import tensorflow as tf; print('GPUs:', tf.config.list_physical_devices('GPU'))"
+source /home/nick/rl-env/bin/activate
+python cartpole.py --max-seconds 300 --log-dir logs/dev_run
 ```
 
-### Quick Start
-```bash
-# Make training script executable
-chmod +x run_cartpole_training.sh
+## Under the hood
 
-# Start training (logs to timestamped directory)
-./run_cartpole_training.sh
-```
+The final agent stacks several techniques from deep RL research:
 
-## Hardware Requirements
+- Soft Actor-Critic (discrete) with automatic entropy tuning
+- Dueling Q-networks with layer normalization
+- Orthogonal initialization (gain=1.414 for ReLU, 0.01 for policy head)
+- 5-step returns for faster credit assignment
+- Prioritized experience replay (GPU-accelerated)
+- 64 parallel environments, vectorized evaluation
 
-- **OS**: Linux (Ubuntu 22.04 tested)
-- **GPU**: NVIDIA with CUDA support (RTX 3090 tested)
-- **RAM**: 8GB+ system memory
-- **Storage**: 1GB for logs and model checkpoints
+The orchestration protocol: [codex/program.md](codex/program.md)
 
----
+## Repo structure
 
-*This represents the fastest CartPole training implementation I'm aware of. The sub-60-second timing includes full TensorFlow initialization, model compilation, and training to convergence. I'd be interested to see any faster implementations that exist.*
+- `cartpole.py`: training loop and evaluation scheduling
+- `SACAgent.py`: the SAC agent with dueling Q-nets
+- `evaluation_worker.py`: parallel evaluation in a subprocess
+- `TFPrioritizedReplayBuffer.py` / `sumtree.py`: prioritized replay
+- `TrainingLogger.py`: structured logging (JSONL, CSV, PNG)
+- `codex/`: experiment specs, results log, and orchestration protocol
