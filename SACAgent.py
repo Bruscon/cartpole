@@ -32,7 +32,7 @@ class SACAgent:
         self.memory_len = 2**17             # Experience replay buffer
         self.gamma = 0.999                  # Discount factor
         self.n_step = 5                     # Multi-step return horizon
-        self.batch_size = 256               # Size of batches for training
+        self.batch_size = 128               # Size of batches for training
         self.learning_rate = 0.03          # Initial learning rate
         self.learning_rate_decay = 0.999    # learning rate decay
         self.epochs = 3                     # number of training loops per step
