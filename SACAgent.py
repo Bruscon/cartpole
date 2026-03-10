@@ -95,7 +95,7 @@ class SACAgent:
         
     def _build_q_model(self):
         """Dueling Q-Network architecture"""
-        ortho_relu = tf.keras.initializers.Orthogonal(gain=tf.sqrt(2.0))
+        ortho_relu = tf.keras.initializers.Orthogonal(gain=1.4142135)
         ortho_lin = tf.keras.initializers.Orthogonal(gain=1.0)
         inputs = Input(shape=(self.state_size,))
         x = Dense(64, activation=None, kernel_initializer=ortho_relu)(inputs)
@@ -114,7 +114,7 @@ class SACAgent:
 
     def _build_policy_model(self):
         """Policy Network for discrete actions"""
-        ortho_relu = tf.keras.initializers.Orthogonal(gain=tf.sqrt(2.0))
+        ortho_relu = tf.keras.initializers.Orthogonal(gain=1.4142135)
         ortho_lin = tf.keras.initializers.Orthogonal(gain=0.01)
         model = Sequential([
             Input(shape=(self.state_size,)),
