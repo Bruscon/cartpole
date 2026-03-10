@@ -70,10 +70,10 @@ class SACAgent:
         self.optimizer_steps = 0
         
         # Create optimizers for each network
-        self.q1_optimizer = Adam(learning_rate=self.lr_schedule, clipnorm=self.clipnorm, beta_2=0.99)
-        self.q2_optimizer = Adam(learning_rate=self.lr_schedule, clipnorm=self.clipnorm, beta_2=0.99)
-        self.policy_optimizer = Adam(learning_rate=self.lr_schedule, clipnorm=self.clipnorm, beta_2=0.99)
-        self.alpha_optimizer = Adam(learning_rate=3e-4, beta_2=0.99)  # Fixed LR for temperature
+        self.q1_optimizer = Adam(learning_rate=self.lr_schedule, clipnorm=self.clipnorm)
+        self.q2_optimizer = Adam(learning_rate=self.lr_schedule, clipnorm=self.clipnorm)
+        self.policy_optimizer = Adam(learning_rate=self.lr_schedule, clipnorm=self.clipnorm)
+        self.alpha_optimizer = Adam(learning_rate=3e-4)  # Fixed LR for temperature
         
         # Handle mixed precision if enabled
         if tf.keras.mixed_precision.global_policy().name == 'mixed_float16':
