@@ -1,5 +1,3 @@
-# evaluation_worker.py - Standalone version without DQNAgent dependency
-
 import gymnasium as gym
 import numpy as np
 import tensorflow as tf

@@ -20,7 +20,8 @@ import subprocess
 from multiprocessing.connection import Pipe
 from pathlib import Path
 
-from DQNAgent import DQNAgent
+#from DQNAgent import DQNAgent
+from SACAgent import SACAgent
 from TrainingLogger import TrainingLogger
 # from evaluation_worker import evaluation_worker_main
 
@@ -199,7 +200,7 @@ def main():
 	envs = TFWrappedVecEnv(gym_envs)
 
 	# Create agent
-	agent = DQNAgent(state_size, action_size, log_dir, INITIAL_MODEL_PATH)
+	agent = SACAgent(state_size, action_size, log_dir, INITIAL_MODEL_PATH)
 
 	#Logging object for generating charts
 	logger = TrainingLogger(log_dir, window_size=25)
@@ -266,11 +267,7 @@ def main():
 
 
 	while total_steps < TOTAL_TIMESTEPS:
-		# Get actions from forward pass on NN
-		greedy_actions = agent.get_greedy_actions(states)
-
-		# Insert randomness for exploration
-		actions = agent.explore_batch(greedy_actions, seed=total_steps)
+		actions = agent.get_actions(states)
 
 		# Take actions in all environments
 		next_states, rewards, terminations, truncations, infos = envs.step(actions)
@@ -320,7 +317,7 @@ def main():
 			logger.log_metrics(step=total_steps, loss=loss, avg_td_error=avg_td_error)
 
 			#soft update the target model
-			agent.update_target_model(tau=agent.tau)
+			agent.update_target_models(tau=agent.tau)
 		
 		
 		# Occasionally print memory usage
@@ -341,7 +338,7 @@ def main():
 			agent.save_model(completed_episodes)
 			
 			# Request evaluation through the pipe
-			model_path = os.path.join(agent.log_dir, f"model_episode_{completed_episodes}.keras")
+			model_path = os.path.join(agent.log_dir, f"model_episode_{completed_episodes}_policy.keras")
 			parent_conn.send((model_path, total_steps))
 			evaluation_pending = True
 			last_eval_step = total_steps
